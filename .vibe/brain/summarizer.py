@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import time
+from pathlib import Path
+
+from context_db import connect, load_config
+
+
+def _read_json(path: Path) -> dict | list | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except OSError:
+        return None
+    except json.JSONDecodeError:
+        return None
+
+
+def _meta_get(con, key: str) -> str | None:
+    row = con.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    return str(row["value"]) if row else None
+
+
+def _meta_set(con, key: str, value: str) -> None:
+    con.execute(
+        "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (key, value),
+    )
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="Generate `.vibe/context/LATEST_CONTEXT.md`.")
+    parser.add_argument("--full", action="store_true", help="Treat as a full refresh (reset recent window).")
+    args = parser.parse_args(argv)
+
+    cfg = load_config()
+    con = connect()
+    try:
+        last_ts_s = _meta_get(con, "last_summary_ts")
+        last_ts = float(last_ts_s) if last_ts_s and not args.full else 0.0
+
+        recent = con.execute(
+            "SELECT path, mtime, loc FROM files WHERE mtime > ? ORDER BY mtime DESC LIMIT ?",
+            (last_ts, cfg.max_recent_files),
+        ).fetchall()
+        if not recent:
+            recent = con.execute(
+                "SELECT path, mtime, loc FROM files ORDER BY mtime DESC LIMIT ?",
+                (cfg.max_recent_files,),
+            ).fetchall()
+
+        critical = con.execute(
+            "SELECT name, file, line FROM symbols WHERE tags_json IS NOT NULL AND tags_json != '[]' ORDER BY file, line LIMIT 50"
+        ).fetchall()
+        vibe = cfg.root / ".vibe"
+        typecheck_status = _read_json(vibe / "reports" / "typecheck_status.json") or {}
+        hotspots = _read_json(vibe / "reports" / "hotspots.json") or {}
+        complexity = _read_json(vibe / "reports" / "complexity.json") or []
+
+        lines: list[str] = []
+        lines.append("# LATEST_CONTEXT\n")
+        lines.append("## [1] Recent changes (Top N)\n")
+        for r in recent:
+            lines.append(f"- {r['path']} (loc={r['loc']})")
+
+        lines.append("\n## [2] Critical map\n")
+        if critical:
+            for r in critical[:30]:
+                lines.append(f"- {r['file']}:{r['line']} {r['name']}")
+        else:
+            lines.append("- (none found; add `@critical` in doc/comments to tag key functions)")
+
+        lines.append("\n## [3] Warnings\n")
+        if typecheck_status:
+            if typecheck_status.get("skipped"):
+                reason = typecheck_status.get("reason") or "skipped"
+                lines.append(f"- typecheck: skipped ({reason})")
+            else:
+                lines.append(
+                    f"- typecheck: baseline_errors={typecheck_status.get('baseline_errors')} current_errors={typecheck_status.get('current_errors')} increased={typecheck_status.get('increased')}"
+                )
+        else:
+            lines.append("- typecheck: (not run yet) — run `python3 scripts/vibe.py doctor --full`")
+
+        # Complexity top 10
+        if isinstance(complexity, list) and complexity:
+            lines.append("- complexity (top 5):")
+            for r in complexity[:5]:
+                lines.append(
+                    f"  - {r.get('file')}:{r.get('line')} {r.get('name')} (lines={r.get('lines')}, nesting={r.get('nesting')}, params={r.get('params')})"
+                )
+        else:
+            lines.append("- complexity: (no warnings)")
+
+        lines.append("\n## [4] Hotspots\n")
+        fan_in = hotspots.get("fan_in") if isinstance(hotspots, dict) else None
+        largest = hotspots.get("largest_files") if isinstance(hotspots, dict) else None
+        symbol_hotspots = hotspots.get("symbol_hotspots") if isinstance(hotspots, dict) else None
+        if fan_in:
+            lines.append("- project fan-in (top 5):")
+            for r in fan_in[:5]:
+                lines.append(f"  - {r['target']}: {r['count']}")
+        if largest:
+            lines.append("- largest files by LOC (top 5):")
+            for r in largest[:5]:
+                lines.append(f"  - {r['path']}: {r['loc']}")
+        if symbol_hotspots:
+            lines.append("- most symbols per file (top 5):")
+            for r in symbol_hotspots[:5]:
+                lines.append(f"  - {r['path']}: {r['symbols']}")
+        if not fan_in and not largest and not symbol_hotspots:
+            lines.append("- (run doctor to generate hotspots)")
+
+        lines.append("\n## [5] Next actions\n")
+        next_actions: list[str] = []
+        if typecheck_status.get("increased"):
+            next_actions.append("Fix new `dotnet build` errors (baseline gate).")
+        if isinstance(complexity, list) and complexity:
+            next_actions.append("Consider splitting the top complexity hotspot method(s).")
+        if not next_actions:
+            next_actions.append("Run placeholder QA on your current xTranslator XML: `python3 scripts/vibe.py qa <file.xml>`")
+            next_actions.append("When changing placeholder logic, add/adjust tests under `tests/XTranslatorAi.Tests`.")
+            next_actions.append("Use `python3 scripts/vibe.py impact <file>` before touching shared core files.")
+        for a in next_actions[:3]:
+            lines.append(f"- {a}")
+
+        cfg.latest_file.parent.mkdir(parents=True, exist_ok=True)
+        cfg.latest_file.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
+        # Update timestamp only after successful write.
+        _meta_set(con, "last_summary_ts", str(time.time()))
+        con.commit()
+
+        print(f"[summarizer] wrote: {cfg.latest_file}")
+        return 0
+    finally:
+        con.close()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(__import__("sys").argv[1:]))

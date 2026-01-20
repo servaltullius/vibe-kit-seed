@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# Local build outputs
+.tmp/
+dist/
+
+# vibe-kit runtime
+.vibe/db/
+.vibe/reports/
+.vibe/locks/
+.vibe/config.json
+.vibe/context/LATEST_CONTEXT.md
+.vibe/context/PACK.md
