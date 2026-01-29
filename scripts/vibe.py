@@ -157,8 +157,15 @@ def main(argv: list[str]) -> int:
     p_coupling.add_argument("--min-pair-count", type=int, default=3)
     p_coupling.add_argument("--min-jaccard", type=float, default=0.2)
     p_coupling.add_argument("--max-files-per-commit", type=int, default=80)
+    p_coupling.add_argument(
+        "--max-churn-per-commit",
+        type=int,
+        default=0,
+        help="Skip commits with >N added+deleted lines (reduce noisy formatting commits). 0 disables.",
+    )
     p_coupling.add_argument("--top", type=int, default=20)
     p_coupling.add_argument("--since", help="Git --since filter (e.g. '6 months ago').")
+    p_coupling.add_argument("--detect-renames", action="store_true", help="Best-effort: treat renames/moves as the same node.")
     p_coupling.add_argument("--out", default=".vibe/reports/change_coupling.json")
     p_coupling.add_argument("--group-by", choices=["file", "dir"], default="file")
     p_coupling.add_argument("--dir-depth", type=int, default=2)
@@ -262,6 +269,7 @@ def main(argv: list[str]) -> int:
             f"--min-pair-count={args.min_pair_count}",
             f"--min-jaccard={args.min_jaccard}",
             f"--max-files-per-commit={args.max_files_per_commit}",
+            f"--max-churn-per-commit={args.max_churn_per_commit}",
             f"--top={args.top}",
             f"--out={args.out}",
             f"--group-by={args.group_by}",
@@ -273,6 +281,8 @@ def main(argv: list[str]) -> int:
         ]
         if args.since:
             coup_args.append(f"--since={args.since}")
+        if args.detect_renames:
+            coup_args.append("--detect-renames")
         return _run(brain / "change_coupling.py", coup_args)
 
     if args.cmd == "boundaries":

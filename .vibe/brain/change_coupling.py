@@ -27,6 +27,13 @@ class Edge:
     jaccard: float
 
 
+@dataclass(frozen=True)
+class CommitMeta:
+    files: list[str]
+    churn: int
+    numstat: list[tuple[str, int]]
+
+
 def _matches_include(rel_posix: str, include_globs: list[str]) -> bool:
     if not include_globs:
         return True
@@ -53,6 +60,95 @@ def parse_git_log_name_only(text: str) -> list[list[str]]:
         cur.append(line)
     if cur:
         commits.append(cur)
+    return commits
+
+
+def parse_git_log_name_status(
+    text: str,
+    *,
+    detect_renames: bool,
+    include_numstat: bool,
+) -> list[CommitMeta]:
+    commits: list[CommitMeta] = []
+    cur: list[str] = []
+    churn = 0
+    cur_numstat: list[tuple[str, int]] = []
+    rename_map: dict[str, str] = {}
+
+    def normalize(p: str) -> str:
+        s = str(p).strip().replace("\\", "/")
+        if s.startswith("./"):
+            s = s[2:]
+        return s
+
+    def canonical(p: str) -> str:
+        cur_p = normalize(p)
+        seen: set[str] = set()
+        while cur_p in rename_map and cur_p not in seen:
+            seen.add(cur_p)
+            cur_p = rename_map[cur_p]
+        return cur_p
+
+    def flush() -> None:
+        nonlocal cur, churn, cur_numstat
+        if not cur:
+            churn = 0
+            cur_numstat = []
+            return
+        commits.append(CommitMeta(files=cur, churn=int(churn), numstat=cur_numstat))
+        cur = []
+        churn = 0
+        cur_numstat = []
+
+    for raw in text.splitlines():
+        line = raw.rstrip("\n")
+        if not line.strip():
+            continue
+        if line.startswith(COMMIT_MARKER):
+            flush()
+            continue
+
+        if include_numstat:
+            parts = line.split("\t", 2)
+            if len(parts) >= 3:
+                a, d, path = parts[0], parts[1], parts[2]
+                if (a.isdigit() or a == "-") and (d.isdigit() or d == "-"):
+                    aa = int(a) if a.isdigit() else 0
+                    dd = int(d) if d.isdigit() else 0
+                    delta = aa + dd
+                    churn += delta
+                    cur_numstat.append((normalize(path), int(delta)))
+                    continue
+
+        parts = line.split("\t")
+        if not parts:
+            continue
+
+        status = parts[0].strip()
+        code = status[:1]
+
+        # name-status entries
+        if code in {"R", "C"} and len(parts) >= 3:
+            old = canonical(parts[1])
+            new = canonical(parts[2])
+            if detect_renames and code == "R" and old and new:
+                rename_map[old] = new
+            if new:
+                cur.append(new)
+            continue
+
+        if len(parts) >= 2 and code and code.isalpha():
+            p = canonical(parts[1])
+            if p:
+                cur.append(p)
+            continue
+
+        # Fallback: treat as a path.
+        p = canonical(line)
+        if p:
+            cur.append(p)
+
+    flush()
     return commits
 
 
@@ -96,6 +192,23 @@ def filter_paths(
 
         out.add(group_path(rel_p.as_posix(), group_by=group_by, dir_depth=dir_depth))
     return sorted(out)
+
+
+def _path_in_scope(cfg, raw: str) -> bool:
+    s = str(raw).strip()
+    if not s:
+        return False
+    s = s.replace("\\", "/")
+    if s.startswith("./"):
+        s = s[2:]
+    if not s or s.startswith("/"):
+        return False
+    rel_p = Path(s)
+    if is_excluded(rel_p, cfg.exclude_dirs):
+        return False
+    if not _matches_include(rel_p.as_posix(), cfg.include_globs):
+        return False
+    return True
 
 
 def compute_change_coupling(
@@ -440,17 +553,32 @@ def compute_hubs(
     return hubs
 
 
-def _run_git_log(root: Path, *, max_commits: int, since: str | None) -> tuple[int, str, str]:
+def _run_git_log(
+    root: Path,
+    *,
+    max_commits: int,
+    since: str | None,
+    name_status: bool,
+    numstat: bool,
+    detect_renames: bool,
+) -> tuple[int, str, str]:
     if shutil.which("git") is None:
         return 127, "", "git not found"
     cmd = [
         "git",
         "log",
-        "--name-only",
         f"--pretty=format:{COMMIT_MARKER}%H",
         "--no-merges",
         f"--max-count={max_commits}",
     ]
+    if name_status:
+        cmd.append("--name-status")
+        if detect_renames:
+            cmd.append("--find-renames")
+    else:
+        cmd.append("--name-only")
+    if numstat:
+        cmd.append("--numstat")
     if since:
         cmd.append(f"--since={since}")
     p = subprocess.run(cmd, cwd=str(root), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -584,8 +712,19 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--min-pair-count", type=int, default=3)
     ap.add_argument("--min-jaccard", type=float, default=0.2, help="Jaccard threshold for building strong clusters.")
     ap.add_argument("--max-files-per-commit", type=int, default=80)
+    ap.add_argument(
+        "--max-churn-per-commit",
+        type=int,
+        default=0,
+        help="Skip commits with >N total added+deleted lines (from `git log --numstat`) to reduce noisy formatting commits. 0 disables.",
+    )
     ap.add_argument("--top", type=int, default=20, help="How many top pairs/files to print.")
     ap.add_argument("--since", help="Git --since filter (e.g. '6 months ago').")
+    ap.add_argument(
+        "--detect-renames",
+        action="store_true",
+        help="Best-effort: treat renames/moves as the same node when mining history (requires name-status parsing).",
+    )
     ap.add_argument("--out", default=".vibe/reports/change_coupling.json")
     ap.add_argument("--group-by", choices=["file", "dir"], default="file")
     ap.add_argument("--dir-depth", type=int, default=2)
@@ -612,7 +751,18 @@ def main(argv: list[str]) -> int:
         return 0
 
     start = time.time()
-    rc, out, err = _run_git_log(root, max_commits=int(args.max_commits), since=args.since)
+    max_churn = max(0, int(args.max_churn_per_commit))
+    want_numstat = max_churn > 0
+    want_name_status = bool(args.detect_renames) or want_numstat
+
+    rc, out, err = _run_git_log(
+        root,
+        max_commits=int(args.max_commits),
+        since=args.since,
+        name_status=want_name_status,
+        numstat=want_numstat,
+        detect_renames=bool(args.detect_renames),
+    )
     if rc != 0:
         payload = {
             "ok": False,
@@ -627,10 +777,23 @@ def main(argv: list[str]) -> int:
             print(err.strip(), file=sys.stderr)
         return 0 if args.best_effort else 1
 
-    commits_raw = parse_git_log_name_only(out)
+    commits_meta: list[CommitMeta]
+    if want_name_status:
+        commits_meta = parse_git_log_name_status(out, detect_renames=bool(args.detect_renames), include_numstat=want_numstat)
+    else:
+        commits_raw = parse_git_log_name_only(out)
+        commits_meta = [CommitMeta(files=files, churn=0, numstat=[]) for files in commits_raw]
+
     commits_filtered: list[list[str]] = []
-    for commit_files in commits_raw:
-        filtered = filter_paths(cfg, commit_files, group_by=args.group_by, dir_depth=int(args.dir_depth))
+    skipped_high_churn = 0
+    for cm in commits_meta:
+        if want_numstat and cm.numstat:
+            churn_in_scope = sum(int(delta) for p, delta in cm.numstat if _path_in_scope(cfg, p))
+            if churn_in_scope > max_churn:
+                skipped_high_churn += 1
+                continue
+
+        filtered = filter_paths(cfg, cm.files, group_by=args.group_by, dir_depth=int(args.dir_depth))
         if filtered:
             commits_filtered.append(filtered)
 
@@ -683,17 +846,20 @@ def main(argv: list[str]) -> int:
             "min_pair_count": int(args.min_pair_count),
             "min_jaccard": min_jaccard,
             "max_files_per_commit": int(args.max_files_per_commit),
+            "max_churn_per_commit": int(args.max_churn_per_commit),
             "group_by": args.group_by,
             "dir_depth": int(args.dir_depth),
             "min_cluster_size": int(args.min_cluster_size),
             "max_clusters": int(args.max_clusters),
             "max_boundary_leaks": int(args.max_boundary_leaks),
             "max_hubs": int(args.max_hubs),
+            "detect_renames": bool(args.detect_renames),
         },
         "stats": {
-            "commits_seen": len(commits_raw),
+            "commits_seen": len(commits_meta),
             "commits_used": len(commits_filtered),
             "skipped_large_commits": int(skipped_large),
+            "skipped_high_churn_commits": int(skipped_high_churn),
             "unique_nodes": len(file_commit_counts),
             "pair_edges": len(pair_counts),
             "strong_edges": len(strong_edges),
@@ -714,7 +880,7 @@ def main(argv: list[str]) -> int:
     print(f"[coupling] wrote: {out_path}")
     print(f"[coupling] wrote: {decoupling_path}")
     print(
-        f"[coupling] commits_used={payload['stats']['commits_used']} unique_nodes={payload['stats']['unique_nodes']} edges={payload['stats']['pair_edges']} skipped_large={skipped_large}"
+        f"[coupling] commits_used={payload['stats']['commits_used']} unique_nodes={payload['stats']['unique_nodes']} edges={payload['stats']['pair_edges']} skipped_large={skipped_large} skipped_high_churn={skipped_high_churn}"
     )
 
     top = max(0, int(args.top))

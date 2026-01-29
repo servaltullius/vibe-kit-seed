@@ -26,6 +26,40 @@ class TestChangeCouplingParse(unittest.TestCase):
         commits = cc.parse_git_log_name_only(text)
         self.assertEqual(commits, [["a.txt", "b.txt"], ["b.txt", "c.txt"]])
 
+    def test_parse_git_log_name_status_detects_rename_and_canonicalizes(self) -> None:
+        text = "\n".join(
+            [
+                "__VIBE_COMMIT__cccccccccccccccccccccccccccccccccccccccc",
+                "R100\ta/old.py\ta/new.py",
+                "__VIBE_COMMIT__bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "M\ta/old.py",
+                "",
+            ]
+        )
+        commits = cc.parse_git_log_name_status(text, detect_renames=True, include_numstat=False)
+        self.assertEqual(len(commits), 2)
+        self.assertEqual(commits[0].files, ["a/new.py"])
+        self.assertEqual(commits[1].files, ["a/new.py"])
+
+    def test_parse_git_log_name_status_parses_numstat_churn(self) -> None:
+        text = "\n".join(
+            [
+                "__VIBE_COMMIT__cccccccccccccccccccccccccccccccccccccccc",
+                "10\t5\tsrc/a.py",
+                "M\tsrc/a.py",
+                "__VIBE_COMMIT__bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "1\t1\tsrc/b.py",
+                "M\tsrc/b.py",
+                "",
+            ]
+        )
+        commits = cc.parse_git_log_name_status(text, detect_renames=False, include_numstat=True)
+        self.assertEqual(len(commits), 2)
+        self.assertEqual(commits[0].churn, 15)
+        self.assertEqual(commits[1].churn, 2)
+        self.assertEqual(commits[0].numstat, [("src/a.py", 15)])
+        self.assertEqual(commits[1].numstat, [("src/b.py", 2)])
+
 
 class TestChangeCouplingCompute(unittest.TestCase):
     def test_compute_change_coupling_pairs_and_jaccard(self) -> None:
