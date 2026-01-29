@@ -2,6 +2,10 @@
 
 This repo is a **publisher/distribution** repo for installing the **repo-local** vibe-kit toolkit into other repositories.
 
+## 한국어 요약
+- 이 repo는 `vibe-kit`을 다른 레포에 배포/설치하기 위한 **seed 배포** 저장소입니다.
+- 이 repo 자체를 의존성/스타터로 “도입”하는 게 아니라, GitHub Release 자산을 받아 target repo에서 설치합니다.
+
 ## What to do
 - Build release assets: `python3 scripts/make_release_assets.py <version> --out-dir dist/<version> --force`
 - Keep changes minimal and security-focused (installer + seed format + allowlist + tests).

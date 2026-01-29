@@ -5,6 +5,16 @@ This repo publishes **immutable** seed release artifacts for installing **vibe-k
 - **You do not "adopt" this repo** as a dependency or starter template.
 - Consumers download the Release assets and run the installer in the **target repo**.
 
+## 한국어 요약
+
+- `vibe-kit-seed`는 앱(UI/아키텍처) 스타터 템플릿이 아니라, `vibe-kit`을 **다른 레포에 배포/설치**하기 위한 “seed 배포” 저장소입니다.
+- GitHub Releases에서 아래 3개 파일을 같은 릴리즈에서 내려받아 **target repo에서** 사용합니다:
+  - `VIBEKIT_SEED-<version>-<sha>.md`
+  - `vibekit_seed_install.py`
+  - `SHA256SUMS`
+- 설치기는 SHA256 검증 후, target repo에 `.vibe/` + `scripts/vibe.py` 등을 **파일로만 설치**합니다(기본은 dry-run, `--apply`가 있어야 실제로 씁니다).
+- 설치기는 기본적으로 어떤 스크립트도 자동 실행하지 않습니다.
+
 ## What this is (and isn't)
 
 Think of this as a distribution/publisher repo:
