@@ -15,6 +15,17 @@ This repo publishes **immutable** seed release artifacts for installing **vibe-k
 - 설치기는 SHA256 검증 후, target repo에 `.vibe/` + `scripts/vibe.py` 등을 **파일로만 설치**합니다(기본은 dry-run, `--apply`가 있어야 실제로 씁니다).
 - 설치기는 기본적으로 어떤 스크립트도 자동 실행하지 않습니다.
 
+### vibe-kit 주요 기능 (설치 후, target repo에서 사용)
+
+설치 후에는 target repo에서 아래처럼 사용합니다:
+- 진단/요약 생성: `python3 scripts/vibe.py doctor --full`
+  - 출력: `.vibe/context/LATEST_CONTEXT.md`, `.vibe/reports/*` (gitignore 권장)
+- 변경 감시(선택): `python3 scripts/vibe.py watch`
+- 컨텍스트 DB 검색: `python3 scripts/vibe.py search "<query>"`
+- 영향도(간단) 분석: `python3 scripts/vibe.py impact <path>`
+- 에이전트에 주기 위한 요약팩: `python3 scripts/vibe.py pack --scope=staged|changed|path|recent --out .vibe/context/PACK.md`
+- Git hook(선택): `python3 scripts/vibe.py hooks --install` (pre-commit에 `.vibe/brain/precommit.py` 연결)
+
 ## What this is (and isn't)
 
 Think of this as a distribution/publisher repo:
@@ -25,6 +36,15 @@ What vibe-kit does (in the *target* repo after install):
 - Builds a local index of the repo (SQLite) and writes summaries under `.vibe/context/`
 - Produces lightweight context packs for LLMs (e.g. `.vibe/context/LATEST_CONTEXT.md`)
 - Writes reports under `.vibe/reports/` (gitignored)
+
+### vibe-kit commands (after install, in the target repo)
+
+- `python3 scripts/vibe.py doctor --full`: scan + reports, refresh `.vibe/context/LATEST_CONTEXT.md`
+- `python3 scripts/vibe.py search "<query>"`: full-text search in the local context DB
+- `python3 scripts/vibe.py pack --scope=...`: generate a compact `.vibe/context/PACK.md` for an agent
+- `python3 scripts/vibe.py impact <path>`: quick impact analysis for a file
+- `python3 scripts/vibe.py watch`: keep context refreshed while you work (watchdog if installed; otherwise polling)
+- `python3 scripts/vibe.py hooks --install`: optional git hook installer
 
 What vibe-kit does **not** do:
 - It is **not** a UI/app starter template.
