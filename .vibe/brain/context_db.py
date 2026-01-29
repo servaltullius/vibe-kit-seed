@@ -23,6 +23,7 @@ class VibeConfig:
     quality_gates: dict[str, Any]
     placeholders: dict[str, Any]
     profiling: dict[str, Any]
+    architecture: dict[str, Any]
 
 
 def repo_root() -> Path:
@@ -55,6 +56,7 @@ def load_config() -> VibeConfig:
         quality_gates=dict(data.get("quality_gates") or {}),
         placeholders=dict(data.get("placeholders") or {}),
         profiling=dict(data.get("profiling") or {}),
+        architecture=dict(data.get("architecture") or {}),
     )
 
 

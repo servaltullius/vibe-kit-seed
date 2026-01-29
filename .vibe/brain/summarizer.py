@@ -57,6 +57,7 @@ def main(argv: list[str]) -> int:
         vibe = cfg.root / ".vibe"
         typecheck_status = _read_json(vibe / "reports" / "typecheck_status.json") or {}
         hotspots = _read_json(vibe / "reports" / "hotspots.json") or {}
+        boundaries = _read_json(vibe / "reports" / "boundaries.json") or {}
         coupling = _read_json(vibe / "reports" / "change_coupling.json") or {}
         complexity = _read_json(vibe / "reports" / "complexity.json") or []
 
@@ -84,6 +85,14 @@ def main(argv: list[str]) -> int:
                 )
         else:
             lines.append("- typecheck: (not run yet) — run `python3 scripts/vibe.py doctor --full`")
+
+        if boundaries and not boundaries.get("skipped"):
+            stats = boundaries.get("stats") if isinstance(boundaries, dict) else None
+            v = stats.get("violations") if isinstance(stats, dict) else None
+            if isinstance(v, int) and v > 0:
+                md_path = boundaries.get("md_path") if isinstance(boundaries, dict) else None
+                suffix = f" (see `{md_path.strip()}`)" if isinstance(md_path, str) and md_path.strip() else ""
+                lines.append(f"- boundaries: violations={v}{suffix}")
 
         # Complexity top 10
         if isinstance(complexity, list) and complexity:
@@ -152,6 +161,11 @@ def main(argv: list[str]) -> int:
         next_actions: list[str] = []
         if typecheck_status.get("increased"):
             next_actions.append("Fix new typecheck errors (baseline gate).")
+        if boundaries and not boundaries.get("skipped"):
+            stats = boundaries.get("stats") if isinstance(boundaries, dict) else None
+            v = stats.get("violations") if isinstance(stats, dict) else None
+            if isinstance(v, int) and v > 0:
+                next_actions.append("Fix boundary violations (run: `python3 scripts/vibe.py boundaries`).")
         if isinstance(complexity, list) and complexity:
             next_actions.append("Consider splitting the top complexity hotspot method(s).")
         if not next_actions:

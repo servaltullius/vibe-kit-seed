@@ -167,6 +167,12 @@ def main(argv: list[str]) -> int:
     p_coupling.add_argument("--max-boundary-leaks", type=int, default=20)
     p_coupling.add_argument("--max-hubs", type=int, default=20)
 
+    p_bound = sub.add_parser("boundaries", help="Detect boundary violations (illegal dependencies) from config rules.")
+    p_bound.add_argument("--out", default=".vibe/reports/boundaries.json")
+    p_bound.add_argument("--md-out", default=".vibe/reports/boundaries.md")
+    p_bound.add_argument("--max-violations", type=int, default=200)
+    p_bound.add_argument("--best-effort", action="store_true", help="Never fail the process (exit 0).")
+
     p_qa = sub.add_parser("qa", help="Placeholder QA for xTranslator XML.")
     p_qa.add_argument("xml_path")
     p_qa.add_argument("--limit", type=int, default=80)
@@ -268,6 +274,16 @@ def main(argv: list[str]) -> int:
         if args.since:
             coup_args.append(f"--since={args.since}")
         return _run(brain / "change_coupling.py", coup_args)
+
+    if args.cmd == "boundaries":
+        bound_args = [
+            f"--out={args.out}",
+            f"--md-out={args.md_out}",
+            f"--max-violations={args.max_violations}",
+        ]
+        if args.best_effort:
+            bound_args.append("--best-effort")
+        return _run(brain / "check_boundaries.py", bound_args)
 
     if args.cmd == "qa":
         return _run(brain / "qa_placeholders.py", [args.xml_path, f"--limit={args.limit}"])

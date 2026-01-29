@@ -80,12 +80,19 @@ DEFAULT_CONFIG = {
     "checks": {"doctor": [], "precommit": []},
     "quality_gates": {
         "cycle_block": True,
+        "boundary_block": False,
         "dotnet_build_block_on_increase": True,
         "typecheck_prefer_solution": False,
         "complexity_warn_threshold": 15,
         "max_method_lines_warn": 50,
         "max_nesting_warn": 4,
         "max_params_warn": 5,
+    },
+    "architecture": {
+        "enabled": True,
+        "rules": [],
+        "python_roots": ["src", "."],
+        "js_aliases": {},
     },
     "placeholders": {
         "enabled": True,
@@ -125,6 +132,7 @@ DEFAULT_AGENT_CHECKLIST = """# AGENT_CHECKLIST (vibe-kit)
 - Check impact for shared/core files: `python3 scripts/vibe.py impact <path>`
 - Find entry points fast:
   - `python3 scripts/vibe.py search "<keyword>"`
+- (Optional) Detect boundary violations (architecture rules): `python3 scripts/vibe.py boundaries`
 - (Optional) Find logical coupling from git history: `python3 scripts/vibe.py coupling`
 - (Optional) Configure repo-specific checks in `.vibe/config.json` (`checks.doctor`, `checks.precommit`).
 - (Optional) Make a compact context pack for an agent:

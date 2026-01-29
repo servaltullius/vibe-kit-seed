@@ -45,6 +45,7 @@ def main(argv: list[str]) -> int:
     step("complexity", "check_complexity.py")
     step("typecheck", "typecheck_baseline.py")
     step("cycles", "check_circular.py")
+    step("boundaries", "check_boundaries.py")
     if args.full:
         step("coupling", "change_coupling.py", ["--best-effort"])
 
@@ -69,6 +70,7 @@ def main(argv: list[str]) -> int:
         "",
         "- See `.vibe/context/LATEST_CONTEXT.md`",
         "- See `.vibe/reports/hotspots.json`, `.vibe/reports/complexity.json`, `.vibe/reports/typecheck_status.json`",
+        "- See `.vibe/reports/boundaries.json` (optional, config-driven)",
         "- See `.vibe/reports/custom_checks.json` (optional, config-driven)",
         "",
     ]

@@ -24,6 +24,7 @@ This repo publishes **immutable** seed release artifacts for installing **vibe-k
 - 변경 감시(선택): `python3 scripts/vibe.py watch`
 - 컨텍스트 DB 검색: `python3 scripts/vibe.py search "<query>"`
 - 영향도(간단) 분석: `python3 scripts/vibe.py impact <path>`
+- (설계/경계 점검) 아키텍처 경계 위반 체크: `python3 scripts/vibe.py boundaries` (config-driven)
 - (설계/디커플링 도움) 변경 결합(change coupling): `python3 scripts/vibe.py coupling`
 - 에이전트에 주기 위한 요약팩: `python3 scripts/vibe.py pack --scope=staged|changed|path|recent --out .vibe/context/PACK.md`
 - Git hook(선택): `python3 scripts/vibe.py hooks --install` (pre-commit에 `.vibe/brain/precommit.py` 연결)
@@ -47,6 +48,7 @@ What vibe-kit does (in the *target* repo after install):
 - `python3 scripts/vibe.py search "<query>"`: full-text search in the local context DB
 - `python3 scripts/vibe.py pack --scope=...`: generate a compact `.vibe/context/PACK.md` for an agent
 - `python3 scripts/vibe.py impact <path>`: quick impact analysis for a file
+- `python3 scripts/vibe.py boundaries`: boundary/architecture rule checker (config-driven)
 - `python3 scripts/vibe.py coupling`: change coupling report (files that tend to change together; useful for refactoring/decoupling)
 - `python3 scripts/vibe.py watch`: keep context refreshed while you work (watchdog if installed; otherwise polling)
 - `python3 scripts/vibe.py hooks --install`: optional git hook installer
