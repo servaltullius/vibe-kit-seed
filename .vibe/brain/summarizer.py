@@ -116,13 +116,13 @@ def main(argv: list[str]) -> int:
         lines.append("\n## [5] Next actions\n")
         next_actions: list[str] = []
         if typecheck_status.get("increased"):
-            next_actions.append("Fix new `dotnet build` errors (baseline gate).")
+            next_actions.append("Fix new typecheck errors (baseline gate).")
         if isinstance(complexity, list) and complexity:
             next_actions.append("Consider splitting the top complexity hotspot method(s).")
         if not next_actions:
-            next_actions.append("Run placeholder QA on your current xTranslator XML: `python3 scripts/vibe.py qa <file.xml>`")
-            next_actions.append("When changing placeholder logic, add/adjust tests under `tests/XTranslatorAi.Tests`.")
-            next_actions.append("Use `python3 scripts/vibe.py impact <file>` before touching shared core files.")
+            next_actions.append("Generate a compact context pack: `python3 scripts/vibe.py pack --scope=changed --out .vibe/context/PACK.md`")
+            next_actions.append("Before touching shared/core files: `python3 scripts/vibe.py impact <file>`")
+            next_actions.append("Run your repo's normal tests/lint/typecheck.")
         for a in next_actions[:3]:
             lines.append(f"- {a}")
 

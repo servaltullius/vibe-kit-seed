@@ -77,6 +77,7 @@ DEFAULT_CONFIG = {
     ],
     "critical_tags": ["@critical", "CRITICAL:"],
     "context": {"latest_file": ".vibe/context/LATEST_CONTEXT.md", "max_recent_files": 12},
+    "checks": {"doctor": [], "precommit": []},
     "quality_gates": {
         "cycle_block": True,
         "dotnet_build_block_on_increase": True,
@@ -123,6 +124,7 @@ DEFAULT_AGENT_CHECKLIST = """# AGENT_CHECKLIST (vibe-kit)
 - Check impact for shared/core files: `python3 scripts/vibe.py impact <path>`
 - Find entry points fast:
   - `python3 scripts/vibe.py search "<keyword>"`
+- (Optional) Configure repo-specific checks in `.vibe/config.json` (`checks.doctor`, `checks.precommit`).
 - (Optional) Make a compact context pack for an agent:
   - `python3 scripts/vibe.py pack --scope=staged|changed|path|recent --out .vibe/context/PACK.md`
 

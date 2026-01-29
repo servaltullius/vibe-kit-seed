@@ -19,6 +19,7 @@ class VibeConfig:
     critical_tags: list[str]
     latest_file: Path
     max_recent_files: int
+    checks: dict[str, Any]
     quality_gates: dict[str, Any]
     placeholders: dict[str, Any]
     profiling: dict[str, Any]
@@ -50,6 +51,7 @@ def load_config() -> VibeConfig:
         critical_tags=list(data.get("critical_tags") or ["@critical", "CRITICAL:"]),
         latest_file=latest_file,
         max_recent_files=max_recent_files,
+        checks=dict(data.get("checks") or {}),
         quality_gates=dict(data.get("quality_gates") or {}),
         placeholders=dict(data.get("placeholders") or {}),
         profiling=dict(data.get("profiling") or {}),
@@ -136,4 +138,3 @@ def is_excluded(rel_path: Path, exclude_dirs: Iterable[str]) -> bool:
 
 def normalize_rel(path: Path) -> str:
     return path.as_posix()
-

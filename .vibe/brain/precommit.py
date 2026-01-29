@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import subprocess
 import sys
 from pathlib import Path
 
-from context_db import load_config
+from context_db import is_excluded, load_config
+from custom_checks import run_custom_checks
 
 
 def _git_root(cfg) -> Path | None:
@@ -27,6 +29,18 @@ def _run(py: Path, args: list[str]) -> int:
     cmd = [sys.executable, str(py), *args]
     p = subprocess.run(cmd)
     return p.returncode
+
+
+def _matches_include(rel_posix: str, include_globs: list[str]) -> bool:
+    if not include_globs:
+        return True
+    for g in include_globs:
+        if fnmatch.fnmatch(rel_posix, g):
+            return True
+        # Treat "**/" prefix as optional so patterns like "**/*.md" match root files too.
+        if g.startswith("**/") and fnmatch.fnmatch(rel_posix, g[3:]):
+            return True
+    return False
 
 
 def main(argv: list[str]) -> int:
@@ -51,14 +65,22 @@ def main(argv: list[str]) -> int:
 
     # Update index for staged files only.
     for f in staged:
-        if not (f.endswith(".cs") or f.endswith(".xaml") or f.endswith(".csproj") or f.endswith(".sln") or f.endswith(".md")):
+        rel = Path(f)
+        if rel.is_absolute():
+            continue
+        if is_excluded(rel, cfg.exclude_dirs):
+            continue
+        if not _matches_include(rel.as_posix(), cfg.include_globs):
+            continue
+        if not (cfg.root / rel).exists():
             continue
         _run(brain / "indexer.py", ["--file", f])
 
     rc = 0
 
     # Typecheck gate only if C# code/project changed.
-    if staged_cs or staged_proj:
+    typecheck_on_precommit = bool(cfg.quality_gates.get("typecheck_run_on_precommit", False))
+    if staged_cs or staged_proj or typecheck_on_precommit:
         rc = max(rc, _run(brain / "typecheck_baseline.py", []))
 
     # Cycle detection only if project files changed.
@@ -71,6 +93,14 @@ def main(argv: list[str]) -> int:
 
     if args.run_tests:
         rc = max(rc, _run(brain / "run_core_tests.py", ["--fast"]))
+
+    checks_cfg = cfg.checks or {}
+    precommit_checks = checks_cfg.get("precommit")
+    if isinstance(precommit_checks, list) and precommit_checks:
+        report_path = cfg.root / ".vibe" / "reports" / "custom_checks_precommit.json"
+        _, failures = run_custom_checks(cfg, precommit_checks, report_path=report_path, default_timeout_sec=60)
+        if failures:
+            rc = 1
 
     if rc != 0:
         print("[precommit] FAIL")

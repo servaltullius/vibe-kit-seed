@@ -18,6 +18,10 @@
 - 영향도 분석: `python3 scripts/vibe.py impact <path>`
 - 요약팩 생성: `python3 scripts/vibe.py pack --scope=staged|changed|path|recent --out .vibe/context/PACK.md`
 
+## 커스텀(레포별)
+- 설정은 `.vibe/config.json`에서 합니다 (`exclude_dirs`, `include_globs`, `quality_gates`, `checks` 등).
+- 커맨드 기반 체크(선택): `.vibe/config.json`의 `checks.doctor` / `checks.precommit`에 원하는 명령을 추가할 수 있습니다.
+
 ## 출력물
 - DB: `.vibe/db/context.sqlite` (git ignore)
 - 리포트: `.vibe/reports/*` (git ignore)

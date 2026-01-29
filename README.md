@@ -25,6 +25,7 @@ This repo publishes **immutable** seed release artifacts for installing **vibe-k
 - 영향도(간단) 분석: `python3 scripts/vibe.py impact <path>`
 - 에이전트에 주기 위한 요약팩: `python3 scripts/vibe.py pack --scope=staged|changed|path|recent --out .vibe/context/PACK.md`
 - Git hook(선택): `python3 scripts/vibe.py hooks --install` (pre-commit에 `.vibe/brain/precommit.py` 연결)
+- 레포별 커스텀(선택): `.vibe/config.json`에서 `exclude_dirs`, `include_globs`, `quality_gates`, `checks` 등을 조정
 
 ## What this is (and isn't)
 
@@ -45,6 +46,7 @@ What vibe-kit does (in the *target* repo after install):
 - `python3 scripts/vibe.py impact <path>`: quick impact analysis for a file
 - `python3 scripts/vibe.py watch`: keep context refreshed while you work (watchdog if installed; otherwise polling)
 - `python3 scripts/vibe.py hooks --install`: optional git hook installer
+- Customize per-repo settings in `.vibe/config.json` (`exclude_dirs`, `include_globs`, `quality_gates`, `checks`, etc.)
 
 What vibe-kit does **not** do:
 - It is **not** a UI/app starter template.

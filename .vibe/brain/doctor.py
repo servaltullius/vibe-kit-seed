@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from context_db import load_config
+from custom_checks import run_custom_checks
 
 
 def _run(py: Path, args: list[str]) -> int:
@@ -48,6 +49,13 @@ def main(argv: list[str]) -> int:
     if args.profile:
         step("profile", "perf_profiler.py", ["--summarize-only"])
 
+    custom_failures: list[tuple[str, int]] = []
+    checks_cfg = cfg.checks or {}
+    doctor_checks = checks_cfg.get("doctor")
+    if isinstance(doctor_checks, list) and doctor_checks:
+        report_path = cfg.root / ".vibe" / "reports" / "custom_checks.json"
+        _, custom_failures = run_custom_checks(cfg, doctor_checks, report_path=report_path)
+
     _run(brain / "summarizer.py", ["--full"] if args.full else [])
 
     report = cfg.root / ".vibe" / "reports" / "doctor_report.md"
@@ -59,8 +67,10 @@ def main(argv: list[str]) -> int:
         "",
         "- See `.vibe/context/LATEST_CONTEXT.md`",
         "- See `.vibe/reports/hotspots.json`, `.vibe/reports/complexity.json`, `.vibe/reports/typecheck_status.json`",
+        "- See `.vibe/reports/custom_checks.json` (optional, config-driven)",
         "",
     ]
+    failures.extend(custom_failures)
     if failures:
         report_lines.append("## Failures")
         for name, rc2 in failures:
