@@ -43,6 +43,15 @@ def _matches_include(rel_posix: str, include_globs: list[str]) -> bool:
     return False
 
 
+def _matches_any(rel_posix: str, globs: list[str]) -> bool:
+    for g in globs:
+        if fnmatch.fnmatch(rel_posix, g):
+            return True
+        if g.startswith("**/") and fnmatch.fnmatch(rel_posix, g[3:]):
+            return True
+    return False
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="vibe-kit pre-commit (staged-only, fast).")
     parser.add_argument("--run-tests", action="store_true", help="Also run core tests (slower).")
@@ -54,14 +63,14 @@ def main(argv: list[str]) -> int:
         return 0
 
     staged = _staged_files(cfg)
-    staged_cs = [f for f in staged if f.endswith(".cs")]
-    staged_proj = [f for f in staged if f.endswith(".csproj") or f.endswith(".sln")]
 
     if not staged:
         print("[precommit] no staged files.")
         return 0
 
     brain = cfg.root / ".vibe" / "brain"
+
+    staged_rel: list[str] = []
 
     # Update index for staged files only.
     for f in staged:
@@ -74,13 +83,25 @@ def main(argv: list[str]) -> int:
             continue
         if not (cfg.root / rel).exists():
             continue
+        staged_rel.append(f)
         _run(brain / "indexer.py", ["--file", f])
 
     rc = 0
 
     # Typecheck gate only if C# code/project changed.
+    staged_cs = [f for f in staged_rel if f.endswith(".cs")]
+    staged_proj = [f for f in staged_rel if f.endswith(".csproj") or f.endswith(".sln")]
+
     typecheck_on_precommit = bool(cfg.quality_gates.get("typecheck_run_on_precommit", False))
-    if staged_cs or staged_proj or typecheck_on_precommit:
+    typecheck_globs_raw = cfg.quality_gates.get("typecheck_when_any_glob", None)
+    typecheck_globs = (
+        [str(g).strip() for g in typecheck_globs_raw if isinstance(g, str) and g.strip()]
+        if isinstance(typecheck_globs_raw, list)
+        else []
+    )
+    typecheck_by_glob = bool(typecheck_globs) and any(_matches_any(Path(f).as_posix(), typecheck_globs) for f in staged_rel)
+
+    if staged_cs or staged_proj or typecheck_on_precommit or typecheck_by_glob:
         rc = max(rc, _run(brain / "typecheck_baseline.py", []))
 
     # Cycle detection only if project files changed.

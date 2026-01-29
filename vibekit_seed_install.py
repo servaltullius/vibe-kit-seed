@@ -131,6 +131,7 @@ def _write_agent_instructions(root: Path, agent: str, *, force: bool, apply: boo
             "# Agent Notes\n\n"
             "## Quick start\n"
             "- Read: `.vibe/context/LATEST_CONTEXT.md`\n"
+            "- (Once) Run: `python3 scripts/vibe.py configure --apply`\n"
             "- Run: `python3 scripts/vibe.py doctor --full`\n\n"
             "## Repo rules\n"
             "- Avoid repo-wide formatting and unrelated cleanup refactors.\n"
@@ -141,6 +142,7 @@ def _write_agent_instructions(root: Path, agent: str, *, force: bool, apply: boo
             "CLAUDE.md",
             "# Project Instructions\n\n"
             "- Read: `.vibe/context/LATEST_CONTEXT.md`\n"
+            "- (Once) Run: `python3 scripts/vibe.py configure --apply`\n"
             "- Run: `python3 scripts/vibe.py doctor --full`\n"
             "- Avoid repo-wide formatting/unrelated refactors.\n",
         ),
@@ -148,18 +150,21 @@ def _write_agent_instructions(root: Path, agent: str, *, force: bool, apply: boo
             ".github/copilot-instructions.md",
             "# Copilot Instructions\n\n"
             "- Use `.vibe/context/LATEST_CONTEXT.md` for repo context.\n"
+            "- (Once) Run: `python3 scripts/vibe.py configure --apply`\n"
             "- Prefer small, localized changes.\n",
         ),
         "cursor": (
             ".cursor/rules/vibekit.md",
             "# Cursor Rules (vibe-kit)\n\n"
             "- Read: `.vibe/context/LATEST_CONTEXT.md`\n"
+            "- (Once) Run: `python3 scripts/vibe.py configure --apply`\n"
             "- Run: `python3 scripts/vibe.py doctor --full`\n",
         ),
         "gemini": (
             "GEMINI.md",
             "# Gemini Instructions\n\n"
             "- Read: `.vibe/context/LATEST_CONTEXT.md`\n"
+            "- (Once) Run: `python3 scripts/vibe.py configure --apply`\n"
             "- Run: `python3 scripts/vibe.py doctor --full`\n",
         ),
     }

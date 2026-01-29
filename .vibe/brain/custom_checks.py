@@ -95,6 +95,10 @@ def run_custom_checks(
             rc = int(p.returncode)
             out = p.stdout or ""
             timed_out = False
+        except OSError as e:
+            rc = 127
+            out = f"{e.__class__.__name__}: {e}"
+            timed_out = False
         except subprocess.TimeoutExpired as e:
             rc = 124
             out = (e.stdout or "") + "\n(timeout)\n"
@@ -125,4 +129,3 @@ def run_custom_checks(
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(results, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return results, failures
-

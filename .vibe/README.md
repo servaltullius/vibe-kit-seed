@@ -8,11 +8,13 @@
 - 기본적으로 네트워크/API 호출을 하지 않습니다(로컬 파일 기반).
 
 ## 빠른 시작
+- (권장) 레포 자동 설정(한 번): `python3 scripts/vibe.py configure --apply`
 - 한 방 진단(권장): `python3 scripts/vibe.py doctor --full`
 - (Windows) `scripts\\vibe.cmd doctor --full`
 - 감시(선택): `python3 scripts/vibe.py watch`
 
 ## 주요 명령
+- 레포 자동 설정(한 번): `python3 scripts/vibe.py configure --apply`
 - 요약/리포트 생성: `python3 scripts/vibe.py doctor --full`
 - 검색: `python3 scripts/vibe.py search "<query>"`
 - 영향도 분석: `python3 scripts/vibe.py impact <path>`

@@ -18,6 +18,7 @@ This repo publishes **immutable** seed release artifacts for installing **vibe-k
 ### vibe-kit 주요 기능 (설치 후, target repo에서 사용)
 
 설치 후에는 target repo에서 아래처럼 사용합니다:
+- (권장) 레포 자동 설정(한 번): `python3 scripts/vibe.py configure --apply`
 - 진단/요약 생성: `python3 scripts/vibe.py doctor --full`
   - 출력: `.vibe/context/LATEST_CONTEXT.md`, `.vibe/reports/*` (gitignore 권장)
 - 변경 감시(선택): `python3 scripts/vibe.py watch`
@@ -40,6 +41,7 @@ What vibe-kit does (in the *target* repo after install):
 
 ### vibe-kit commands (after install, in the target repo)
 
+- `python3 scripts/vibe.py configure --apply`: auto-detect repo stack and update `.vibe/config.json` (recommended once)
 - `python3 scripts/vibe.py doctor --full`: scan + reports, refresh `.vibe/context/LATEST_CONTEXT.md`
 - `python3 scripts/vibe.py search "<query>"`: full-text search in the local context DB
 - `python3 scripts/vibe.py pack --scope=...`: generate a compact `.vibe/context/PACK.md` for an agent
@@ -76,6 +78,7 @@ What vibe-kit does **not** do:
    - Windows: `py vibekit_seed_install.py install VIBEKIT_SEED-...md --root . --expected-seed-sha256 <sha256> --apply`
 
 4) After install (in the target repo), run:
+   - (recommended once) `python3 scripts/vibe.py configure --apply`
    - `python3 scripts/vibe.py doctor --full`
 
 ## Create a new seed file

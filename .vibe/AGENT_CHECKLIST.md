@@ -2,6 +2,7 @@
 
 ## Quick start (do this first)
 - Read: `.vibe/context/LATEST_CONTEXT.md`
+- (Recommended once, after install) Auto-configure for this repo: `python3 scripts/vibe.py configure --apply`
 - If you run only one command:
   - (WSL/Linux) `python3 scripts/vibe.py doctor --full`
   - (Windows) `scripts\\vibe.cmd doctor --full`

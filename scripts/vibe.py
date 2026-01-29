@@ -124,6 +124,13 @@ def main(argv: list[str]) -> int:
     p_boot = sub.add_parser("bootstrap", help="Create `.vibe/` scaffolding (no code changes).")
     p_boot.add_argument("--install-deps", action="store_true", help="Install Python deps (optional).")
 
+    p_conf = sub.add_parser(
+        "configure",
+        help="Auto-detect this repo and update `.vibe/config.json` (dry-run by default).",
+    )
+    p_conf.add_argument("--apply", action="store_true", help="Write changes to `.vibe/config.json`.")
+    p_conf.add_argument("--force", action="store_true", help="Overwrite existing configured values.")
+
     sub.add_parser("init", help="Initial index + baseline (safe, no code changes).")
 
     p_hooks = sub.add_parser("hooks", help="Install git hooks (optional).")
@@ -181,6 +188,14 @@ def main(argv: list[str]) -> int:
         if args.install_deps:
             cmd.append("--install-deps")
         return subprocess.call(cmd, cwd=str(root))
+
+    if args.cmd == "configure":
+        conf_args: list[str] = []
+        if args.apply:
+            conf_args.append("--apply")
+        if args.force:
+            conf_args.append("--force")
+        return _run(brain / "configure.py", conf_args)
 
     if args.cmd == "init":
         rc = _run(brain / "indexer.py", ["--scan-all"])
