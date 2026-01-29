@@ -38,11 +38,11 @@ class TestChangeCouplingCompute(unittest.TestCase):
         self.assertEqual(file_counts, {"a": 2, "b": 3, "c": 2})
         self.assertEqual(sums, {"a": 3, "b": 4, "c": 3})
 
+        edges = cc.compute_edges(pair_counts=pair_counts, file_commit_counts=file_counts, min_pair_count=2)
         report = cc.build_report(
-            pair_counts=pair_counts,
+            edges=edges,
             file_commit_counts=file_counts,
             sum_couplings=sums,
-            min_pair_count=2,
             max_pairs=10,
         )
         pairs = report["pairs"]
@@ -52,6 +52,47 @@ class TestChangeCouplingCompute(unittest.TestCase):
         self.assertTrue(all(abs(p["jaccard"] - 0.6667) < 1e-4 for p in pairs))
 
 
+class TestChangeCouplingSuggestions(unittest.TestCase):
+    def test_clusters_leaks_and_hubs(self) -> None:
+        commits = [
+            ["p1", "p2"],
+            ["p1", "p2"],
+            ["p1", "p2"],
+            ["p3", "p4"],
+            ["p3", "p4"],
+            ["p3", "p4"],
+            ["p2", "p3"],
+            ["p2", "p3"],
+        ]
+        pair_counts, file_counts, sums, skipped = cc.compute_change_coupling(commits, max_files_per_commit=100)
+        self.assertEqual(skipped, 0)
+
+        edges = cc.compute_edges(pair_counts=pair_counts, file_commit_counts=file_counts, min_pair_count=2)
+        strong_edges = [e for e in edges if e.jaccard >= 0.6]
+        weak_edges = [e for e in edges if e.jaccard < 0.6]
+
+        clusters, node_to_cluster = cc.compute_clusters(strong_edges, min_cluster_size=2, max_clusters=10)
+        self.assertEqual(len(clusters), 2)
+        self.assertTrue(any(c.get("nodes") == ["p1", "p2"] for c in clusters))
+        self.assertTrue(any(c.get("nodes") == ["p3", "p4"] for c in clusters))
+        self.assertEqual(node_to_cluster.get("p2"), 1)
+        self.assertEqual(node_to_cluster.get("p3"), 2)
+
+        leaks = cc.compute_boundary_leaks(weak_edges, node_to_cluster=node_to_cluster, max_boundary_leaks=10)
+        self.assertEqual(len(leaks), 1)
+        self.assertEqual(leaks[0]["a"], "p2")
+        self.assertEqual(leaks[0]["b"], "p3")
+
+        hubs = cc.compute_hubs(
+            weak_edges,
+            file_commit_counts=file_counts,
+            sum_couplings=sums,
+            node_to_cluster=node_to_cluster,
+            max_hubs=10,
+        )
+        self.assertTrue(any(h["node"] == "p2" for h in hubs))
+        self.assertTrue(any(h["node"] == "p3" for h in hubs))
+
+
 if __name__ == "__main__":
     unittest.main()
-

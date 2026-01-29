@@ -155,12 +155,17 @@ def main(argv: list[str]) -> int:
     p_coupling = sub.add_parser("coupling", help="Analyze change coupling (files that change together in git history).")
     p_coupling.add_argument("--max-commits", type=int, default=200)
     p_coupling.add_argument("--min-pair-count", type=int, default=3)
+    p_coupling.add_argument("--min-jaccard", type=float, default=0.2)
     p_coupling.add_argument("--max-files-per-commit", type=int, default=80)
     p_coupling.add_argument("--top", type=int, default=20)
     p_coupling.add_argument("--since", help="Git --since filter (e.g. '6 months ago').")
     p_coupling.add_argument("--out", default=".vibe/reports/change_coupling.json")
     p_coupling.add_argument("--group-by", choices=["file", "dir"], default="file")
     p_coupling.add_argument("--dir-depth", type=int, default=2)
+    p_coupling.add_argument("--min-cluster-size", type=int, default=2)
+    p_coupling.add_argument("--max-clusters", type=int, default=10)
+    p_coupling.add_argument("--max-boundary-leaks", type=int, default=20)
+    p_coupling.add_argument("--max-hubs", type=int, default=20)
 
     p_qa = sub.add_parser("qa", help="Placeholder QA for xTranslator XML.")
     p_qa.add_argument("xml_path")
@@ -249,11 +254,16 @@ def main(argv: list[str]) -> int:
         coup_args = [
             f"--max-commits={args.max_commits}",
             f"--min-pair-count={args.min_pair_count}",
+            f"--min-jaccard={args.min_jaccard}",
             f"--max-files-per-commit={args.max_files_per_commit}",
             f"--top={args.top}",
             f"--out={args.out}",
             f"--group-by={args.group_by}",
             f"--dir-depth={args.dir_depth}",
+            f"--min-cluster-size={args.min_cluster_size}",
+            f"--max-clusters={args.max_clusters}",
+            f"--max-boundary-leaks={args.max_boundary_leaks}",
+            f"--max-hubs={args.max_hubs}",
         ]
         if args.since:
             coup_args.append(f"--since={args.since}")

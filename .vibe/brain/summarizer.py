@@ -125,6 +125,25 @@ def main(argv: list[str]) -> int:
                 if a and b and n is not None:
                     lines.append(f"  - {a} <-> {b} (count={n}, jaccard={j})")
 
+        clusters = coupling.get("clusters") if isinstance(coupling, dict) else None
+        if isinstance(clusters, list) and clusters:
+            c0 = clusters[0] if isinstance(clusters[0], dict) else None
+            nodes = c0.get("nodes") if isinstance(c0, dict) else None
+            if isinstance(nodes, list) and nodes:
+                show = ", ".join([str(x) for x in nodes[:6]])
+                suffix = " ..." if len(nodes) > 6 else ""
+                lines.append(f"- change coupling cluster (top): {show}{suffix}")
+
+        leaks = coupling.get("boundary_leaks") if isinstance(coupling, dict) else None
+        if isinstance(leaks, list) and leaks:
+            r0 = leaks[0] if isinstance(leaks[0], dict) else None
+            a = r0.get("a") if isinstance(r0, dict) else None
+            b = r0.get("b") if isinstance(r0, dict) else None
+            n = r0.get("count") if isinstance(r0, dict) else None
+            j = r0.get("jaccard") if isinstance(r0, dict) else None
+            if a and b and n is not None:
+                lines.append(f"- change coupling boundary leak (top): {a} <-> {b} (count={n}, jaccard={j})")
+
         lines.append("\n## [5] Next actions\n")
         next_actions: list[str] = []
         if typecheck_status.get("increased"):

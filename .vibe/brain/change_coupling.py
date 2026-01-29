@@ -9,6 +9,7 @@ import subprocess
 import sys
 import time
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
@@ -16,6 +17,14 @@ from context_db import is_excluded, load_config
 
 
 COMMIT_MARKER = "__VIBE_COMMIT__"
+
+
+@dataclass(frozen=True)
+class Edge:
+    a: str
+    b: str
+    count: int
+    jaccard: float
 
 
 def _matches_include(rel_posix: str, include_globs: list[str]) -> bool:
@@ -122,25 +131,35 @@ def compute_change_coupling(
     return dict(pair_counts), dict(file_commit_counts), dict(sum_couplings), skipped_large_commits
 
 
-def build_report(
+def compute_edges(
     *,
     pair_counts: dict[tuple[str, str], int],
     file_commit_counts: dict[str, int],
-    sum_couplings: dict[str, int],
     min_pair_count: int,
-    max_pairs: int,
-) -> dict[str, Any]:
-    pairs: list[dict[str, Any]] = []
+) -> list[Edge]:
+    edges: list[Edge] = []
     for (a, b), n in pair_counts.items():
         if min_pair_count > 0 and n < min_pair_count:
             continue
         denom = file_commit_counts.get(a, 0) + file_commit_counts.get(b, 0) - n
         jaccard = (n / denom) if denom > 0 else 0.0
-        pairs.append({"a": a, "b": b, "count": n, "jaccard": round(jaccard, 4)})
+        edges.append(Edge(a=a, b=b, count=int(n), jaccard=float(jaccard)))
+    edges.sort(key=lambda e: (-e.count, -e.jaccard, e.a, e.b))
+    return edges
 
-    pairs.sort(key=lambda r: (-int(r["count"]), -float(r["jaccard"]), str(r["a"]), str(r["b"])))
-    if max_pairs > 0:
-        pairs = pairs[:max_pairs]
+
+def _edge_to_json(e: Edge) -> dict[str, Any]:
+    return {"a": e.a, "b": e.b, "count": int(e.count), "jaccard": round(float(e.jaccard), 4)}
+
+
+def build_report(
+    *,
+    edges: list[Edge],
+    file_commit_counts: dict[str, int],
+    sum_couplings: dict[str, int],
+    max_pairs: int,
+) -> dict[str, Any]:
+    pairs = [_edge_to_json(e) for e in (edges[:max_pairs] if max_pairs > 0 else edges)]
 
     files: list[dict[str, Any]] = []
     for p, commits in file_commit_counts.items():
@@ -148,6 +167,166 @@ def build_report(
     files.sort(key=lambda r: (-int(r["sum_couplings"]), -int(r["commits"]), str(r["path"])))
 
     return {"pairs": pairs, "files": files[:200]}
+
+
+def compute_clusters(
+    strong_edges: list[Edge],
+    *,
+    min_cluster_size: int,
+    max_clusters: int,
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    adj: dict[str, list[int]] = defaultdict(list)
+    for i, e in enumerate(strong_edges):
+        adj[e.a].append(i)
+        adj[e.b].append(i)
+
+    visited: set[str] = set()
+    clusters_all: list[dict[str, Any]] = []
+    node_to_cluster: dict[str, int] = {}
+
+    for start in sorted(adj.keys()):
+        if start in visited:
+            continue
+        stack = [start]
+        visited.add(start)
+        nodes: set[str] = set()
+        edge_ids: set[int] = set()
+        while stack:
+            cur = stack.pop()
+            nodes.add(cur)
+            for eid in adj.get(cur, []):
+                edge_ids.add(eid)
+                e = strong_edges[eid]
+                other = e.b if e.a == cur else e.a
+                if other not in visited:
+                    visited.add(other)
+                    stack.append(other)
+
+        if len(nodes) < max(2, int(min_cluster_size)):
+            continue
+
+        nodes_sorted = sorted(nodes)
+        internal_edges = [strong_edges[eid] for eid in sorted(edge_ids)]
+        internal_edge_count = len(internal_edges)
+        internal_count_sum = sum(e.count for e in internal_edges)
+        internal_jaccard_avg = (sum(e.jaccard for e in internal_edges) / internal_edge_count) if internal_edge_count else 0.0
+        internal_edges_sorted = sorted(internal_edges, key=lambda e: (-e.count, -e.jaccard, e.a, e.b))
+        top_internal = [_edge_to_json(e) for e in internal_edges_sorted[:5]]
+
+        clusters_all.append(
+            {
+                "nodes": nodes_sorted,
+                "node_count": len(nodes_sorted),
+                "internal_edges": internal_edge_count,
+                "internal_count_sum": int(internal_count_sum),
+                "internal_jaccard_avg": round(float(internal_jaccard_avg), 4),
+                "top_internal_pairs": top_internal,
+                "suggestion": "Candidate component boundary (modules that frequently co-change).",
+            }
+        )
+
+    clusters_all.sort(
+        key=lambda c: (
+            -int(c["internal_count_sum"]),
+            -int(c["internal_edges"]),
+            -int(c["node_count"]),
+            -float(c["internal_jaccard_avg"]),
+            ",".join(c["nodes"]),
+        )
+    )
+
+    clusters = clusters_all[: int(max_clusters)] if max_clusters > 0 else clusters_all
+
+    for idx, c in enumerate(clusters, 1):
+        c["id"] = idx
+        for n in c["nodes"]:
+            node_to_cluster[n] = idx
+
+    return clusters, node_to_cluster
+
+
+def compute_boundary_leaks(
+    weak_edges: list[Edge],
+    *,
+    node_to_cluster: dict[str, int],
+    max_boundary_leaks: int,
+) -> list[dict[str, Any]]:
+    leaks: list[dict[str, Any]] = []
+    for e in weak_edges:
+        ca = node_to_cluster.get(e.a)
+        cb = node_to_cluster.get(e.b)
+        if ca is None or cb is None or ca == cb:
+            continue
+        leaks.append(
+            {
+                **_edge_to_json(e),
+                "cluster_a": int(ca),
+                "cluster_b": int(cb),
+                "suggestion": "Possible boundary leak between components; consider making the dependency explicit or extracting shared abstractions.",
+            }
+        )
+
+    leaks.sort(key=lambda r: (-int(r["count"]), -float(r["jaccard"]), str(r["a"]), str(r["b"])))
+    if max_boundary_leaks > 0:
+        leaks = leaks[: int(max_boundary_leaks)]
+    return leaks
+
+
+def compute_hubs(
+    weak_edges: list[Edge],
+    *,
+    file_commit_counts: dict[str, int],
+    sum_couplings: dict[str, int],
+    node_to_cluster: dict[str, int],
+    max_hubs: int,
+) -> list[dict[str, Any]]:
+    clustered_nodes = set(node_to_cluster.keys())
+    weak_adj: dict[str, list[Edge]] = defaultdict(list)
+    for e in weak_edges:
+        weak_adj[e.a].append(e)
+        weak_adj[e.b].append(e)
+
+    hubs: list[dict[str, Any]] = []
+    for node in sorted(clustered_nodes):
+        own_cluster = node_to_cluster.get(node)
+        connected_clusters: set[int] = set()
+        cross_sum = 0
+        for e in weak_adj.get(node, []):
+            other = e.b if e.a == node else e.a
+            other_cluster = node_to_cluster.get(other)
+            if other_cluster is None or other_cluster == own_cluster:
+                continue
+            connected_clusters.add(int(other_cluster))
+            cross_sum += int(e.count)
+
+        if not connected_clusters:
+            continue
+
+        hubs.append(
+            {
+                "node": node,
+                "cluster": int(own_cluster) if own_cluster is not None else None,
+                "commits": int(file_commit_counts.get(node, 0)),
+                "sum_couplings": int(sum_couplings.get(node, 0)),
+                "connected_clusters_count": len(connected_clusters),
+                "connected_clusters": sorted(connected_clusters),
+                "cross_edge_count_sum": int(cross_sum),
+                "suggestion": "High cross-component coupling; consider splitting responsibilities or introducing a façade/port to reduce ripple effects.",
+            }
+        )
+
+    hubs.sort(
+        key=lambda h: (
+            -int(h["connected_clusters_count"]),
+            -int(h["cross_edge_count_sum"]),
+            -int(h["sum_couplings"]),
+            -int(h["commits"]),
+            str(h["node"]),
+        )
+    )
+    if max_hubs > 0:
+        hubs = hubs[: int(max_hubs)]
+    return hubs
 
 
 def _run_git_log(root: Path, *, max_commits: int, since: str | None) -> tuple[int, str, str]:
@@ -176,12 +355,17 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description="Change coupling (co-change) report from git history.")
     ap.add_argument("--max-commits", type=int, default=200)
     ap.add_argument("--min-pair-count", type=int, default=3)
+    ap.add_argument("--min-jaccard", type=float, default=0.2, help="Jaccard threshold for building strong clusters.")
     ap.add_argument("--max-files-per-commit", type=int, default=80)
     ap.add_argument("--top", type=int, default=20, help="How many top pairs/files to print.")
     ap.add_argument("--since", help="Git --since filter (e.g. '6 months ago').")
     ap.add_argument("--out", default=".vibe/reports/change_coupling.json")
     ap.add_argument("--group-by", choices=["file", "dir"], default="file")
     ap.add_argument("--dir-depth", type=int, default=2)
+    ap.add_argument("--min-cluster-size", type=int, default=2)
+    ap.add_argument("--max-clusters", type=int, default=10)
+    ap.add_argument("--max-boundary-leaks", type=int, default=20)
+    ap.add_argument("--max-hubs", type=int, default=20)
     ap.add_argument("--best-effort", action="store_true", help="Never fail the process (exit 0).")
     args = ap.parse_args(argv)
 
@@ -227,11 +411,37 @@ def main(argv: list[str]) -> int:
         commits_filtered,
         max_files_per_commit=int(args.max_files_per_commit),
     )
-    report_core = build_report(
+    edges = compute_edges(
         pair_counts=pair_counts,
         file_commit_counts=file_commit_counts,
-        sum_couplings=sum_couplings,
         min_pair_count=int(args.min_pair_count),
+    )
+
+    min_jaccard = float(args.min_jaccard)
+    strong_edges = [e for e in edges if e.jaccard >= min_jaccard]
+    weak_edges = [e for e in edges if e.jaccard < min_jaccard]
+
+    clusters, node_to_cluster = compute_clusters(
+        strong_edges,
+        min_cluster_size=int(args.min_cluster_size),
+        max_clusters=int(args.max_clusters),
+    )
+    boundary_leaks = compute_boundary_leaks(
+        weak_edges,
+        node_to_cluster=node_to_cluster,
+        max_boundary_leaks=int(args.max_boundary_leaks),
+    )
+    hubs = compute_hubs(
+        weak_edges,
+        file_commit_counts=file_commit_counts,
+        sum_couplings=sum_couplings,
+        node_to_cluster=node_to_cluster,
+        max_hubs=int(args.max_hubs),
+    )
+    report_core = build_report(
+        edges=edges,
+        file_commit_counts=file_commit_counts,
+        sum_couplings=sum_couplings,
         max_pairs=500,
     )
 
@@ -244,9 +454,14 @@ def main(argv: list[str]) -> int:
             "max_commits": int(args.max_commits),
             "since": args.since,
             "min_pair_count": int(args.min_pair_count),
+            "min_jaccard": min_jaccard,
             "max_files_per_commit": int(args.max_files_per_commit),
             "group_by": args.group_by,
             "dir_depth": int(args.dir_depth),
+            "min_cluster_size": int(args.min_cluster_size),
+            "max_clusters": int(args.max_clusters),
+            "max_boundary_leaks": int(args.max_boundary_leaks),
+            "max_hubs": int(args.max_hubs),
         },
         "stats": {
             "commits_seen": len(commits_raw),
@@ -254,7 +469,11 @@ def main(argv: list[str]) -> int:
             "skipped_large_commits": int(skipped_large),
             "unique_nodes": len(file_commit_counts),
             "pair_edges": len(pair_counts),
+            "strong_edges": len(strong_edges),
         },
+        "clusters": clusters,
+        "boundary_leaks": boundary_leaks,
+        "hubs": hubs,
         **report_core,
     }
 
@@ -276,9 +495,27 @@ def main(argv: list[str]) -> int:
         for r in payload["files"][:top]:
             print(f"- {r['path']} (sum_couplings={r['sum_couplings']}, commits={r['commits']})")
 
+    if top and payload.get("clusters"):
+        print("\nTop clusters:")
+        for c in payload["clusters"][: min(top, 5)]:
+            nodes = c.get("nodes") or []
+            nodes_s = ", ".join(list(nodes)[:6]) + (" ..." if isinstance(nodes, list) and len(nodes) > 6 else "")
+            print(f"- #{c.get('id')} (nodes={c.get('node_count')}, internal_sum={c.get('internal_count_sum')}): {nodes_s}")
+
+    if top and payload.get("boundary_leaks"):
+        print("\nTop boundary leaks:")
+        for r in payload["boundary_leaks"][: min(top, 5)]:
+            print(f"- {r['a']} <-> {r['b']} (count={r['count']}, jaccard={r['jaccard']})")
+
+    if top and payload.get("hubs"):
+        print("\nTop hubs:")
+        for r in payload["hubs"][: min(top, 5)]:
+            print(
+                f"- {r['node']} (clusters={r['connected_clusters_count']}, cross_sum={r['cross_edge_count_sum']}, sum_couplings={r['sum_couplings']})"
+            )
+
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
-
