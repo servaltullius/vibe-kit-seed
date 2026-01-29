@@ -1,18 +1,15 @@
 # PROFILE_GUIDE (vibe-kit)
 
-This project is primarily a Windows WPF app + Core library.
+vibe-kit does not inject profiling code. It can optionally summarize timing logs you keep under `.vibe/reports/` (gitignored).
 
-## Recommended (Windows) tooling
-- PerfView (ETW) for CPU sampling
-- `dotnet-trace` for .NET trace collection (optional)
+## Optional: performance.log summary
 
-### dotnet-trace quick start
-1) Install (once):
-   - `dotnet tool install --global dotnet-trace`
-2) Run the app (or a target process), find PID, then collect:
-   - `dotnet-trace collect --process-id <PID> --duration 00:00:20 -o trace.nettrace`
-3) Open `trace.nettrace` in Visual Studio / PerfView.
+- Create `.vibe/reports/performance.log` with tab-separated rows:
+  - `name<TAB>count<TAB>avg_ms<TAB>max_ms`
+  - Example: `load_config\t120\t0.12\t1.20`
+- Run: `python3 scripts/vibe.py doctor --profile`
+- Output: `.vibe/reports/performance_stats.json`
 
 ## vibe-kit integration
-- `python3 scripts/vibe.py doctor --full --profile` will only summarize existing logs under `.vibe/reports/`.
+- `python3 scripts/vibe.py doctor --profile` (or `--full --profile`) only summarizes existing logs under `.vibe/reports/`.
 - No source-code injection is performed.

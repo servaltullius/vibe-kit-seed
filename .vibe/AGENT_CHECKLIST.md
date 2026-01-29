@@ -9,15 +9,14 @@
 ## Before coding
 - Read: `.vibe/agent_memory/DONT_DO_THIS.md`
 - Check impact for shared/core files: `python3 scripts/vibe.py impact <path>`
-- Find entry points fast:
-  - `python3 scripts/vibe.py search TranslationService`
-  - `python3 scripts/vibe.py search PlaceholderMasker`
+- Find entry points fast: `python3 scripts/vibe.py search "<keyword>"`
+- (Optional) Make a compact context pack for an agent:
+  - `python3 scripts/vibe.py pack --scope=staged|changed|path|recent --out .vibe/context/PACK.md`
 
 ## While coding
 - Keep changes small and localized.
-- For placeholder/token logic, add/adjust tests under `tests/XTranslatorAi.Tests`.
-- When validating xTranslator outputs: `python3 scripts/vibe.py qa <file.xml>`
+- Treat placeholders/tokens as runtime contracts (e.g. `<...>`, `{0}`, `%s`) and update tests if you change them.
 
 ## Before finishing
 - Run: `python3 scripts/vibe.py doctor --full` (or at least `python3 scripts/vibe.py doctor`)
-- Run tests (core): `dotnet test tests/XTranslatorAi.Tests/XTranslatorAi.Tests.csproj -c Release`
+- Run the repo's normal tests/lint (e.g. `pytest`, `npm test`, `dotnet test`, etc.)

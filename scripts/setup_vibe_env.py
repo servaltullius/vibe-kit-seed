@@ -105,7 +105,7 @@ DEFAULT_DONT_DO_THIS = """# DONT_DO_THIS (vibe-kit)
 Avoid these by default:
 - Repo-wide formatting/re-linting.
 - Large “cleanup” refactors unrelated to the task.
-- Editing sample `*.xml` data outputs unless explicitly needed.
+- Editing generated artifacts or sample outputs unless explicitly needed (e.g. `dist/`, `build/`, fixtures).
 - Changing placeholder/token rules without updating tests.
 """
 
@@ -122,37 +122,33 @@ DEFAULT_AGENT_CHECKLIST = """# AGENT_CHECKLIST (vibe-kit)
 - Read: `.vibe/agent_memory/DONT_DO_THIS.md`
 - Check impact for shared/core files: `python3 scripts/vibe.py impact <path>`
 - Find entry points fast:
-  - `python3 scripts/vibe.py search TranslationService`
-  - `python3 scripts/vibe.py search PlaceholderMasker`
+  - `python3 scripts/vibe.py search "<keyword>"`
+- (Optional) Make a compact context pack for an agent:
+  - `python3 scripts/vibe.py pack --scope=staged|changed|path|recent --out .vibe/context/PACK.md`
 
 ## While coding
 - Keep changes small and localized.
-- For placeholder/token logic, add/adjust tests under `tests/XTranslatorAi.Tests`.
-- When validating xTranslator outputs: `python3 scripts/vibe.py qa <file.xml>`
+- Treat placeholders/tokens as runtime contracts (e.g. `<...>`, `{0}`, `%s`) and update tests if you change them.
 
 ## Before finishing
 - Run: `python3 scripts/vibe.py doctor --full` (or at least `python3 scripts/vibe.py doctor`)
-- Run tests (core): `dotnet test tests/XTranslatorAi.Tests/XTranslatorAi.Tests.csproj -c Release`
+- Run the repo's normal tests/lint (e.g. `pytest`, `npm test`, `dotnet test`, etc.)
 """
 
 
 DEFAULT_PROFILE_GUIDE = """# PROFILE_GUIDE (vibe-kit)
 
-This project is primarily a Windows WPF app + Core library.
+vibe-kit does not inject profiling code. It can optionally summarize timing logs you keep under `.vibe/reports/` (gitignored).
 
-## Recommended (Windows) tooling
-- PerfView (ETW) for CPU sampling
-- `dotnet-trace` for .NET trace collection (optional)
-
-### dotnet-trace quick start
-1) Install (once):
-   - `dotnet tool install --global dotnet-trace`
-2) Run the app (or a target process), find PID, then collect:
-   - `dotnet-trace collect --process-id <PID> --duration 00:00:20 -o trace.nettrace`
-3) Open `trace.nettrace` in Visual Studio / PerfView.
+## Optional: performance.log summary
+- Create `.vibe/reports/performance.log` with tab-separated rows:
+  - `name<TAB>count<TAB>avg_ms<TAB>max_ms`
+  - Example: `load_config\t120\t0.12\t1.20`
+- Run: `python3 scripts/vibe.py doctor --profile`
+- Output: `.vibe/reports/performance_stats.json`
 
 ## vibe-kit integration
-- `python3 scripts/vibe.py doctor --full --profile` will only summarize existing logs under `.vibe/reports/`.
+- `python3 scripts/vibe.py doctor --profile` (or `--full --profile`) only summarizes existing logs under `.vibe/reports/`.
 - No source-code injection is performed.
 """
 

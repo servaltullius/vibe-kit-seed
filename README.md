@@ -1,6 +1,27 @@
-# vibe-kit (seed distribution)
+# vibe-kit-seed
 
-This repo publishes **immutable** `VIBEKIT_SEED*.md` release artifacts and a standalone installer script.
+This repo publishes **immutable** seed release artifacts for installing **vibe-kit** into *another* repository.
+
+- **You do not "adopt" this repo** as a dependency or starter template.
+- Consumers download the Release assets and run the installer in the **target repo**.
+
+## What this is (and isn't)
+
+Think of this as a distribution/publisher repo:
+- `vibe-kit-seed` (this repo): builds and publishes the seed artifacts (`VIBEKIT_SEED-...md`, installer, `SHA256SUMS`)
+- `vibe-kit` (installed into a target repo): a small **repo-local** toolkit that helps humans/agents get project context fast
+
+What vibe-kit does (in the *target* repo after install):
+- Builds a local index of the repo (SQLite) and writes summaries under `.vibe/context/`
+- Produces lightweight context packs for LLMs (e.g. `.vibe/context/LATEST_CONTEXT.md`)
+- Writes reports under `.vibe/reports/` (gitignored)
+
+What vibe-kit does **not** do:
+- It is **not** a UI/app starter template.
+- It is **not** an AI agent runner/sandbox.
+- It is **not** a release/packaging system for your app (e.g. Windows EXE distribution).
+- It makes **no network/API calls** by default.
+- The installer **does not auto-run** any extracted scripts.
 
 ## Recommended distribution model
 
@@ -22,7 +43,7 @@ This repo publishes **immutable** `VIBEKIT_SEED*.md` release artifacts and a sta
    - Linux/macOS: `python3 vibekit_seed_install.py install VIBEKIT_SEED-...md --root . --expected-seed-sha256 <sha256> --apply`
    - Windows: `py vibekit_seed_install.py install VIBEKIT_SEED-...md --root . --expected-seed-sha256 <sha256> --apply`
 
-4) (Optional) After install, run:
+4) After install (in the target repo), run:
    - `python3 scripts/vibe.py doctor --full`
 
 ## Create a new seed file

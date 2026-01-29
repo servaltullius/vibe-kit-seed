@@ -89,6 +89,10 @@ def _seed_render_markdown(payload_zip: bytes, included_files: list[str]) -> str:
     return (
         f"# VIBEKIT_SEED (v2)\n\n"
         "This is a single-file seed that can bootstrap **vibe-kit** into another repository.\n\n"
+        "vibe-kit is a small **repo-local** toolkit that generates context summaries under `.vibe/context/` and reports under\n"
+        "`.vibe/reports/`.\n\n"
+        "- It is **not** an AI agent runner/sandbox.\n"
+        "- It makes **no network/API calls** by default.\n\n"
         f"- Created: `{created}`\n"
         f"- Payload sha256: `{sha}`\n\n"
         "## Install\n\n"
