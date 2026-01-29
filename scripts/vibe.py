@@ -152,6 +152,16 @@ def main(argv: list[str]) -> int:
     p_impact.add_argument("path")
     p_impact.add_argument("--limit", type=int, default=40)
 
+    p_coupling = sub.add_parser("coupling", help="Analyze change coupling (files that change together in git history).")
+    p_coupling.add_argument("--max-commits", type=int, default=200)
+    p_coupling.add_argument("--min-pair-count", type=int, default=3)
+    p_coupling.add_argument("--max-files-per-commit", type=int, default=80)
+    p_coupling.add_argument("--top", type=int, default=20)
+    p_coupling.add_argument("--since", help="Git --since filter (e.g. '6 months ago').")
+    p_coupling.add_argument("--out", default=".vibe/reports/change_coupling.json")
+    p_coupling.add_argument("--group-by", choices=["file", "dir"], default="file")
+    p_coupling.add_argument("--dir-depth", type=int, default=2)
+
     p_qa = sub.add_parser("qa", help="Placeholder QA for xTranslator XML.")
     p_qa.add_argument("xml_path")
     p_qa.add_argument("--limit", type=int, default=80)
@@ -234,6 +244,20 @@ def main(argv: list[str]) -> int:
 
     if args.cmd == "impact":
         return _run(brain / "impact_analyzer.py", [args.path, f"--limit={args.limit}"])
+
+    if args.cmd == "coupling":
+        coup_args = [
+            f"--max-commits={args.max_commits}",
+            f"--min-pair-count={args.min_pair_count}",
+            f"--max-files-per-commit={args.max_files_per_commit}",
+            f"--top={args.top}",
+            f"--out={args.out}",
+            f"--group-by={args.group_by}",
+            f"--dir-depth={args.dir_depth}",
+        ]
+        if args.since:
+            coup_args.append(f"--since={args.since}")
+        return _run(brain / "change_coupling.py", coup_args)
 
     if args.cmd == "qa":
         return _run(brain / "qa_placeholders.py", [args.xml_path, f"--limit={args.limit}"])

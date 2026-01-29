@@ -11,6 +11,7 @@
 - Read: `.vibe/agent_memory/DONT_DO_THIS.md`
 - Check impact for shared/core files: `python3 scripts/vibe.py impact <path>`
 - Find entry points fast: `python3 scripts/vibe.py search "<keyword>"`
+- (Optional) Find logical coupling from git history: `python3 scripts/vibe.py coupling`
 - (Optional) Configure repo-specific checks in `.vibe/config.json` (`checks.doctor`, `checks.precommit`).
 - (Optional) Make a compact context pack for an agent:
   - `python3 scripts/vibe.py pack --scope=staged|changed|path|recent --out .vibe/context/PACK.md`

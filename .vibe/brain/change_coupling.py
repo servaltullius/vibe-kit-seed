@@ -1,0 +1,284 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import fnmatch
+import json
+import shutil
+import subprocess
+import sys
+import time
+from collections import defaultdict
+from pathlib import Path, PurePosixPath
+from typing import Any, Iterable
+
+from context_db import is_excluded, load_config
+
+
+COMMIT_MARKER = "__VIBE_COMMIT__"
+
+
+def _matches_include(rel_posix: str, include_globs: list[str]) -> bool:
+    if not include_globs:
+        return True
+    for g in include_globs:
+        if fnmatch.fnmatch(rel_posix, g):
+            return True
+        if g.startswith("**/") and fnmatch.fnmatch(rel_posix, g[3:]):
+            return True
+    return False
+
+
+def parse_git_log_name_only(text: str) -> list[list[str]]:
+    commits: list[list[str]] = []
+    cur: list[str] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith(COMMIT_MARKER):
+            if cur:
+                commits.append(cur)
+            cur = []
+            continue
+        cur.append(line)
+    if cur:
+        commits.append(cur)
+    return commits
+
+
+def group_path(rel_posix: str, *, group_by: str, dir_depth: int) -> str:
+    p = PurePosixPath(rel_posix)
+    if group_by == "file":
+        return rel_posix
+    # group_by == "dir"
+    parent = p.parent
+    if str(parent) in {".", ""}:
+        return "."
+    parts = parent.parts
+    if dir_depth <= 0:
+        return parts[0]
+    return "/".join(parts[:dir_depth])
+
+
+def filter_paths(
+    cfg,
+    paths: Iterable[str],
+    *,
+    group_by: str,
+    dir_depth: int,
+) -> list[str]:
+    out: set[str] = set()
+    for raw in paths:
+        s = str(raw).strip()
+        if not s:
+            continue
+        s = s.replace("\\", "/")
+        if s.startswith("./"):
+            s = s[2:]
+        if not s or s.startswith("/"):
+            continue
+
+        rel_p = Path(s)
+        if is_excluded(rel_p, cfg.exclude_dirs):
+            continue
+        if not _matches_include(rel_p.as_posix(), cfg.include_globs):
+            continue
+
+        out.add(group_path(rel_p.as_posix(), group_by=group_by, dir_depth=dir_depth))
+    return sorted(out)
+
+
+def compute_change_coupling(
+    commits: Iterable[Iterable[str]],
+    *,
+    max_files_per_commit: int,
+) -> tuple[dict[tuple[str, str], int], dict[str, int], dict[str, int], int]:
+    pair_counts: dict[tuple[str, str], int] = defaultdict(int)
+    file_commit_counts: dict[str, int] = defaultdict(int)
+    skipped_large_commits = 0
+
+    for files in commits:
+        uniq = sorted(set(files))
+        if len(uniq) < 2:
+            continue
+        if max_files_per_commit > 0 and len(uniq) > max_files_per_commit:
+            skipped_large_commits += 1
+            continue
+
+        for f in uniq:
+            file_commit_counts[f] += 1
+        for i in range(len(uniq)):
+            a = uniq[i]
+            for j in range(i + 1, len(uniq)):
+                b = uniq[j]
+                pair_counts[(a, b)] += 1
+
+    sum_couplings: dict[str, int] = defaultdict(int)
+    for (a, b), n in pair_counts.items():
+        sum_couplings[a] += n
+        sum_couplings[b] += n
+
+    return dict(pair_counts), dict(file_commit_counts), dict(sum_couplings), skipped_large_commits
+
+
+def build_report(
+    *,
+    pair_counts: dict[tuple[str, str], int],
+    file_commit_counts: dict[str, int],
+    sum_couplings: dict[str, int],
+    min_pair_count: int,
+    max_pairs: int,
+) -> dict[str, Any]:
+    pairs: list[dict[str, Any]] = []
+    for (a, b), n in pair_counts.items():
+        if min_pair_count > 0 and n < min_pair_count:
+            continue
+        denom = file_commit_counts.get(a, 0) + file_commit_counts.get(b, 0) - n
+        jaccard = (n / denom) if denom > 0 else 0.0
+        pairs.append({"a": a, "b": b, "count": n, "jaccard": round(jaccard, 4)})
+
+    pairs.sort(key=lambda r: (-int(r["count"]), -float(r["jaccard"]), str(r["a"]), str(r["b"])))
+    if max_pairs > 0:
+        pairs = pairs[:max_pairs]
+
+    files: list[dict[str, Any]] = []
+    for p, commits in file_commit_counts.items():
+        files.append({"path": p, "commits": int(commits), "sum_couplings": int(sum_couplings.get(p, 0))})
+    files.sort(key=lambda r: (-int(r["sum_couplings"]), -int(r["commits"]), str(r["path"])))
+
+    return {"pairs": pairs, "files": files[:200]}
+
+
+def _run_git_log(root: Path, *, max_commits: int, since: str | None) -> tuple[int, str, str]:
+    if shutil.which("git") is None:
+        return 127, "", "git not found"
+    cmd = [
+        "git",
+        "log",
+        "--name-only",
+        f"--pretty=format:{COMMIT_MARKER}%H",
+        "--no-merges",
+        f"--max-count={max_commits}",
+    ]
+    if since:
+        cmd.append(f"--since={since}")
+    p = subprocess.run(cmd, cwd=str(root), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    return int(p.returncode), p.stdout or "", p.stderr or ""
+
+
+def _write_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def main(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser(description="Change coupling (co-change) report from git history.")
+    ap.add_argument("--max-commits", type=int, default=200)
+    ap.add_argument("--min-pair-count", type=int, default=3)
+    ap.add_argument("--max-files-per-commit", type=int, default=80)
+    ap.add_argument("--top", type=int, default=20, help="How many top pairs/files to print.")
+    ap.add_argument("--since", help="Git --since filter (e.g. '6 months ago').")
+    ap.add_argument("--out", default=".vibe/reports/change_coupling.json")
+    ap.add_argument("--group-by", choices=["file", "dir"], default="file")
+    ap.add_argument("--dir-depth", type=int, default=2)
+    ap.add_argument("--best-effort", action="store_true", help="Never fail the process (exit 0).")
+    args = ap.parse_args(argv)
+
+    cfg = load_config()
+    root = cfg.root
+    out_path = root / str(args.out)
+
+    if not (root / ".git").exists():
+        payload = {
+            "ok": True,
+            "skipped": True,
+            "reason": "no .git directory found",
+            "timestamp": time.time(),
+        }
+        _write_json(out_path, payload)
+        print("[coupling] SKIP: no .git directory found")
+        return 0
+
+    start = time.time()
+    rc, out, err = _run_git_log(root, max_commits=int(args.max_commits), since=args.since)
+    if rc != 0:
+        payload = {
+            "ok": False,
+            "error": err.strip() or f"git log failed (rc={rc})",
+            "rc": rc,
+            "timestamp": time.time(),
+            "out_path": str(args.out),
+        }
+        _write_json(out_path, payload)
+        print(f"[coupling] ERROR: git log failed (rc={rc})", file=sys.stderr)
+        if err.strip():
+            print(err.strip(), file=sys.stderr)
+        return 0 if args.best_effort else 1
+
+    commits_raw = parse_git_log_name_only(out)
+    commits_filtered: list[list[str]] = []
+    for commit_files in commits_raw:
+        filtered = filter_paths(cfg, commit_files, group_by=args.group_by, dir_depth=int(args.dir_depth))
+        if filtered:
+            commits_filtered.append(filtered)
+
+    pair_counts, file_commit_counts, sum_couplings, skipped_large = compute_change_coupling(
+        commits_filtered,
+        max_files_per_commit=int(args.max_files_per_commit),
+    )
+    report_core = build_report(
+        pair_counts=pair_counts,
+        file_commit_counts=file_commit_counts,
+        sum_couplings=sum_couplings,
+        min_pair_count=int(args.min_pair_count),
+        max_pairs=500,
+    )
+
+    payload = {
+        "ok": True,
+        "skipped": False,
+        "timestamp": time.time(),
+        "duration_sec": round(time.time() - start, 3),
+        "params": {
+            "max_commits": int(args.max_commits),
+            "since": args.since,
+            "min_pair_count": int(args.min_pair_count),
+            "max_files_per_commit": int(args.max_files_per_commit),
+            "group_by": args.group_by,
+            "dir_depth": int(args.dir_depth),
+        },
+        "stats": {
+            "commits_seen": len(commits_raw),
+            "commits_used": len(commits_filtered),
+            "skipped_large_commits": int(skipped_large),
+            "unique_nodes": len(file_commit_counts),
+            "pair_edges": len(pair_counts),
+        },
+        **report_core,
+    }
+
+    _write_json(out_path, payload)
+
+    print(f"[coupling] wrote: {out_path}")
+    print(
+        f"[coupling] commits_used={payload['stats']['commits_used']} unique_nodes={payload['stats']['unique_nodes']} edges={payload['stats']['pair_edges']} skipped_large={skipped_large}"
+    )
+
+    top = max(0, int(args.top))
+    if top and payload.get("pairs"):
+        print("\nTop pairs:")
+        for r in payload["pairs"][:top]:
+            print(f"- {r['a']} <-> {r['b']} (count={r['count']}, jaccard={r['jaccard']})")
+
+    if top and payload.get("files"):
+        print("\nTop sum-of-couplings:")
+        for r in payload["files"][:top]:
+            print(f"- {r['path']} (sum_couplings={r['sum_couplings']}, commits={r['commits']})")
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
+

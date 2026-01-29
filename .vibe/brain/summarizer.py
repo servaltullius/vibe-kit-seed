@@ -57,6 +57,7 @@ def main(argv: list[str]) -> int:
         vibe = cfg.root / ".vibe"
         typecheck_status = _read_json(vibe / "reports" / "typecheck_status.json") or {}
         hotspots = _read_json(vibe / "reports" / "hotspots.json") or {}
+        coupling = _read_json(vibe / "reports" / "change_coupling.json") or {}
         complexity = _read_json(vibe / "reports" / "complexity.json") or []
 
         lines: list[str] = []
@@ -112,6 +113,17 @@ def main(argv: list[str]) -> int:
                 lines.append(f"  - {r['path']}: {r['symbols']}")
         if not fan_in and not largest and not symbol_hotspots:
             lines.append("- (run doctor to generate hotspots)")
+
+        pairs = coupling.get("pairs") if isinstance(coupling, dict) else None
+        if isinstance(pairs, list) and pairs:
+            lines.append("- change coupling (top 3 pairs):")
+            for r in pairs[:3]:
+                a = r.get("a")
+                b = r.get("b")
+                n = r.get("count")
+                j = r.get("jaccard")
+                if a and b and n is not None:
+                    lines.append(f"  - {a} <-> {b} (count={n}, jaccard={j})")
 
         lines.append("\n## [5] Next actions\n")
         next_actions: list[str] = []

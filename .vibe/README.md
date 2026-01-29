@@ -18,6 +18,7 @@
 - 요약/리포트 생성: `python3 scripts/vibe.py doctor --full`
 - 검색: `python3 scripts/vibe.py search "<query>"`
 - 영향도 분석: `python3 scripts/vibe.py impact <path>`
+- 변경 결합(change coupling, 설계/디커플링 도움): `python3 scripts/vibe.py coupling`
 - 요약팩 생성: `python3 scripts/vibe.py pack --scope=staged|changed|path|recent --out .vibe/context/PACK.md`
 
 ## 커스텀(레포별)

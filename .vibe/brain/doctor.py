@@ -45,6 +45,8 @@ def main(argv: list[str]) -> int:
     step("complexity", "check_complexity.py")
     step("typecheck", "typecheck_baseline.py")
     step("cycles", "check_circular.py")
+    if args.full:
+        step("coupling", "change_coupling.py", ["--best-effort"])
 
     if args.profile:
         step("profile", "perf_profiler.py", ["--summarize-only"])
