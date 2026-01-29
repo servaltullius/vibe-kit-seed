@@ -245,6 +245,116 @@ def compute_clusters(
     return clusters, node_to_cluster
 
 
+def _classify_node(node: str) -> list[str]:
+    s = node.lower()
+    tags: list[str] = []
+
+    shared_words = ("shared", "common", "utils", "util", "core", "lib", "libs", "base", "foundation")
+    infra_words = ("infra", "infrastructure", "adapter", "adapters", "gateway", "client", "clients", "integration", "external")
+    domain_words = ("domain", "model", "models", "entity", "entities", "aggregate", "aggregates")
+    ui_words = ("ui", "web", "frontend", "mobile", "app")
+    data_words = ("db", "data", "repo", "repository", "storage", "persistence")
+
+    if any(w in s for w in shared_words):
+        tags.append("shared")
+    if any(w in s for w in infra_words):
+        tags.append("infra")
+    if any(w in s for w in domain_words):
+        tags.append("domain")
+    if any(w in s for w in ui_words):
+        tags.append("ui")
+    if any(w in s for w in data_words):
+        tags.append("data")
+
+    return tags
+
+
+def _boundary_leak_playbooks(a: str, b: str) -> list[dict[str, Any]]:
+    tags_a = set(_classify_node(a))
+    tags_b = set(_classify_node(b))
+
+    shared_side = None
+    if "shared" in tags_a and "shared" not in tags_b:
+        shared_side = a
+    elif "shared" in tags_b and "shared" not in tags_a:
+        shared_side = b
+
+    playbooks: list[dict[str, Any]] = []
+
+    playbooks.append(
+        {
+            "title": "Extract shared contract module (공유 계약/타입 모듈 추출)",
+            "when_to_use": "Two areas co-change because of shared DTOs/types/config keys or shared validation rules.",
+            "steps": [
+                "List the top shared items that force co-change (DTO/type/config key/enum/constant).",
+                "Create a small `<contracts>/` (or `<shared>/contracts/`) area that contains ONLY stable contracts (no business logic).",
+                f"Move the shared items there and update {a} and {b} to depend on the contracts module instead of each other.",
+                "Add lightweight compatibility tests at the boundary (serialization/validation) if applicable.",
+            ],
+            "acceptance": [
+                "Edits to internal logic in one side no longer require touching the other side.",
+                "Only contract changes require coordinated updates (and those are explicit).",
+            ],
+            "safety_checks": [
+                "Run your normal test/typecheck/lint suite.",
+                f"Run: `python3 scripts/vibe.py impact <moved-file>` before/after moves to control blast radius.",
+            ],
+        }
+    )
+
+    playbooks.append(
+        {
+            "title": "Introduce façade API (파사드로 경계 고정)",
+            "when_to_use": "One side is reaching into the other side’s internals; many call sites depend on implementation details.",
+            "steps": [
+                "Identify the minimal set of operations that the consumer truly needs (the public boundary).",
+                "Create a single entry surface (facade/service) that exposes those operations with stable inputs/outputs.",
+                "Make the consumer depend only on that facade; forbid internal imports/usages across the boundary.",
+                "Refactor internals behind the facade freely (keep the facade stable).",
+            ],
+            "acceptance": [
+                "Cross-boundary references go through one narrow surface (facade).",
+                "Internal refactors stop causing widespread ripple edits in the other side.",
+            ],
+            "safety_checks": [
+                "Add a small boundary test suite for the facade (happy path + one failure).",
+                "Prefer multiple small PRs (facade first, then move call sites, then internal cleanup).",
+            ],
+        }
+    )
+
+    acl_when = "Upstream/downstream models diverge; you want to prevent one model from leaking into the other."
+    if ("infra" in tags_a and "domain" in tags_b) or ("infra" in tags_b and "domain" in tags_a):
+        acl_when = "Infra/integration code and domain code co-change together; translate at the boundary (ports/adapters or ACL)."
+
+    playbooks.append(
+        {
+            "title": "Anti-corruption layer / Adapter (ACL/어댑터 번역 레이어)",
+            "when_to_use": acl_when,
+            "steps": [
+                "Pick a ‘consumer-owned’ boundary model (DTOs/interfaces) that will not leak upstream terms.",
+                "Implement an adapter/translator layer that is the ONLY place allowed to talk across the boundary.",
+                "Translate data and errors at the adapter boundary (map upstream concepts -> local concepts).",
+                "Gradually move cross-boundary usages behind the adapter until the rest of the code is insulated.",
+            ],
+            "acceptance": [
+                "Only adapter code changes when the other side changes its schema/API.",
+                "Core domain code stays stable and uses its own language/model.",
+            ],
+            "safety_checks": [
+                "Add mapping tests for the adapter (golden fixtures if possible).",
+                "If behavior is risky, do a strangler-style migration: keep old path + new adapter path behind a flag until stable.",
+            ],
+        }
+    )
+
+    # Add a small hint if we think one side is shared.
+    if shared_side:
+        playbooks[0]["note"] = f"Hint: `{shared_side}` looks like a shared area; keep it thin/stable and push variability outward."
+
+    return playbooks
+
+
 def compute_boundary_leaks(
     weak_edges: list[Edge],
     *,
@@ -263,6 +373,7 @@ def compute_boundary_leaks(
                 "cluster_a": int(ca),
                 "cluster_b": int(cb),
                 "suggestion": "Possible boundary leak between components; consider making the dependency explicit or extracting shared abstractions.",
+                "playbooks": _boundary_leak_playbooks(e.a, e.b),
             }
         )
 
@@ -349,6 +460,122 @@ def _run_git_log(root: Path, *, max_commits: int, since: str | None) -> tuple[in
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def render_decoupling_suggestions_md(payload: dict[str, Any]) -> str:
+    ts = payload.get("timestamp")
+    ts_s = ""
+    if isinstance(ts, (int, float)):
+        ts_s = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(ts)))
+
+    lines: list[str] = []
+    lines.append("# Decoupling suggestions (from change coupling)\n")
+    if ts_s:
+        lines.append(f"- Generated: `{ts_s}`")
+    params = payload.get("params")
+    if isinstance(params, dict):
+        group_by = params.get("group_by")
+        dir_depth = params.get("dir_depth")
+        min_pair = params.get("min_pair_count")
+        min_j = params.get("min_jaccard")
+        lines.append(f"- Params: group_by={group_by!r} dir_depth={dir_depth!r} min_pair_count={min_pair!r} min_jaccard={min_j!r}")
+    lines.append("")
+
+    lines.append("## How to use\n")
+    lines.append("- Pick 1 boundary leak, choose 1 playbook, and keep the first PR small.")
+    lines.append("- Use `python3 scripts/vibe.py impact <path>` before moving shared/core files.")
+    lines.append("- After a few commits, re-run `python3 scripts/vibe.py coupling` to see if the coupling decreases.")
+    lines.append("")
+
+    clusters = payload.get("clusters")
+    if isinstance(clusters, list) and clusters:
+        lines.append("## Clusters (module candidates)\n")
+        for c in clusters[:5]:
+            if not isinstance(c, dict):
+                continue
+            cid = c.get("id")
+            nodes = c.get("nodes")
+            if not isinstance(nodes, list) or not nodes:
+                continue
+            nodes_s = ", ".join(str(x) for x in nodes[:10]) + (" ..." if len(nodes) > 10 else "")
+            lines.append(f"### Cluster #{cid}\n")
+            lines.append(f"- Nodes: {nodes_s}")
+            lines.append(f"- Internal edges: {c.get('internal_edges')}, internal_count_sum: {c.get('internal_count_sum')}, avg_jaccard: {c.get('internal_jaccard_avg')}")
+            tip = c.get("suggestion")
+            if tip:
+                lines.append(f"- Tip: {tip}")
+            lines.append("")
+
+    leaks = payload.get("boundary_leaks")
+    if isinstance(leaks, list) and leaks:
+        lines.append("## Boundary leaks (cross-component coupling)\n")
+        for i, r in enumerate(leaks[:10], 1):
+            if not isinstance(r, dict):
+                continue
+            a = r.get("a")
+            b = r.get("b")
+            if not a or not b:
+                continue
+            lines.append(f"### Leak {i}: `{a}` <-> `{b}`\n")
+            lines.append(f"- count: {r.get('count')}  /  jaccard: {r.get('jaccard')}")
+            lines.append(f"- clusters: {r.get('cluster_a')} ↔ {r.get('cluster_b')}")
+            if r.get("suggestion"):
+                lines.append(f"- summary: {r.get('suggestion')}")
+            if r.get("note"):
+                lines.append(f"- note: {r.get('note')}")
+            lines.append("")
+
+            playbooks = r.get("playbooks")
+            if isinstance(playbooks, list) and playbooks:
+                lines.append("#### Refactor playbooks (choose one)\n")
+                for pb in playbooks[:3]:
+                    if not isinstance(pb, dict):
+                        continue
+                    title = pb.get("title") or "Playbook"
+                    lines.append(f"##### {title}\n")
+                    when = pb.get("when_to_use")
+                    if when:
+                        lines.append(f"- When: {when}")
+                    note = pb.get("note")
+                    if note:
+                        lines.append(f"- Note: {note}")
+                    steps = pb.get("steps")
+                    if isinstance(steps, list) and steps:
+                        lines.append("- Steps:")
+                        for s in steps:
+                            lines.append(f"  - {s}")
+                    acceptance = pb.get("acceptance")
+                    if isinstance(acceptance, list) and acceptance:
+                        lines.append("- Acceptance:")
+                        for s in acceptance:
+                            lines.append(f"  - {s}")
+                    checks = pb.get("safety_checks")
+                    if isinstance(checks, list) and checks:
+                        lines.append("- Safety checks:")
+                        for s in checks:
+                            lines.append(f"  - {s}")
+                    lines.append("")
+
+            lines.append("---\n")
+
+    hubs = payload.get("hubs")
+    if isinstance(hubs, list) and hubs:
+        lines.append("## Hubs (cross-cluster change drivers)\n")
+        for r in hubs[:10]:
+            if not isinstance(r, dict):
+                continue
+            node = r.get("node")
+            if not node:
+                continue
+            lines.append(f"- `{node}`: clusters={r.get('connected_clusters_count')}, cross_sum={r.get('cross_edge_count_sum')}, sum_couplings={r.get('sum_couplings')}")
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def main(argv: list[str]) -> int:
@@ -477,9 +704,15 @@ def main(argv: list[str]) -> int:
         **report_core,
     }
 
+    decoupling_rel = ".vibe/reports/decoupling_suggestions.md"
+    payload["decoupling_suggestions_md_path"] = decoupling_rel
+    decoupling_path = root / decoupling_rel
+    _write_text(decoupling_path, render_decoupling_suggestions_md(payload))
+
     _write_json(out_path, payload)
 
     print(f"[coupling] wrote: {out_path}")
+    print(f"[coupling] wrote: {decoupling_path}")
     print(
         f"[coupling] commits_used={payload['stats']['commits_used']} unique_nodes={payload['stats']['unique_nodes']} edges={payload['stats']['pair_edges']} skipped_large={skipped_large}"
     )

@@ -144,6 +144,10 @@ def main(argv: list[str]) -> int:
             if a and b and n is not None:
                 lines.append(f"- change coupling boundary leak (top): {a} <-> {b} (count={n}, jaccard={j})")
 
+        md_path = coupling.get("decoupling_suggestions_md_path") if isinstance(coupling, dict) else None
+        if isinstance(md_path, str) and md_path.strip():
+            lines.append(f"- decoupling playbooks: see `{md_path.strip()}`")
+
         lines.append("\n## [5] Next actions\n")
         next_actions: list[str] = []
         if typecheck_status.get("increased"):

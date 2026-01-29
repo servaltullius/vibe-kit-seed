@@ -82,6 +82,10 @@ class TestChangeCouplingSuggestions(unittest.TestCase):
         self.assertEqual(len(leaks), 1)
         self.assertEqual(leaks[0]["a"], "p2")
         self.assertEqual(leaks[0]["b"], "p3")
+        self.assertIn("playbooks", leaks[0])
+        self.assertIsInstance(leaks[0]["playbooks"], list)
+        self.assertGreaterEqual(len(leaks[0]["playbooks"]), 1)
+        self.assertTrue(all("title" in pb for pb in leaks[0]["playbooks"]))
 
         hubs = cc.compute_hubs(
             weak_edges,
