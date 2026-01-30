@@ -134,6 +134,8 @@ DEFAULT_AGENT_CHECKLIST = """# AGENT_CHECKLIST (vibe-kit)
   - `python3 scripts/vibe.py search "<keyword>"`
 - (Optional) Detect boundary violations (architecture rules): `python3 scripts/vibe.py boundaries`
 - (Optional) Find logical coupling from git history: `python3 scripts/vibe.py coupling`
+  - Useful options: `--detect-renames`, `--max-churn-per-commit 5000`
+  - Decoupling playbooks: `.vibe/reports/decoupling_suggestions.md`
 - (Optional) Configure repo-specific checks in `.vibe/config.json` (`checks.doctor`, `checks.precommit`).
 - (Optional) Make a compact context pack for an agent:
   - `python3 scripts/vibe.py pack --scope=staged|changed|path|recent --out .vibe/context/PACK.md`
