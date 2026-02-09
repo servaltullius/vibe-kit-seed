@@ -24,6 +24,7 @@ class _DummyCfg:
     exclude_dirs: list[str] = field(default_factory=list)
     include_globs: list[str] = field(default_factory=list)
     max_recent_files: int = 10
+    context_commands: dict[str, str] = field(default_factory=dict)
 
 
 def _memory_db() -> sqlite3.Connection:
@@ -141,6 +142,63 @@ class TestPackScopeFallback(unittest.TestCase):
             self.assertNotIn("falling back to scope=recent", stderr)
             pack_text = (root / ".vibe" / "context" / "PACK.md").read_text(encoding="utf-8")
             self.assertIn("- Scope: `changed` (1 files)", pack_text)
+
+
+class TestPackCommandHints(unittest.TestCase):
+    def _run_pack(
+        self,
+        root: Path,
+        *,
+        context_commands: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        cfg = _DummyCfg(root=root, context_commands=dict(context_commands or {}))
+        con = _memory_db()
+        out = io.StringIO()
+        err = io.StringIO()
+        with (
+            patch.object(pack, "load_config", return_value=cfg),
+            patch.object(pack, "connect", return_value=con),
+            patch.object(pack, "_git_available", return_value=True),
+            patch.object(pack, "_files_staged", return_value=["keep.py"]),
+            patch.object(pack, "_files_recent", return_value=["keep.py"]),
+            redirect_stdout(out),
+            redirect_stderr(err),
+        ):
+            rc = pack.main(["--scope=staged", "--out=.vibe/context/PACK.md"])
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_pack_commands_use_repo_aware_defaults_without_hardcoded_project_path(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "keep.py").write_text("x = 1\n", encoding="utf-8")
+            (root / "scripts").mkdir(parents=True, exist_ok=True)
+            (root / "scripts" / "vibe.py").write_text("# stub\n", encoding="utf-8")
+            rc, _stdout, _stderr = self._run_pack(root)
+            self.assertEqual(rc, 0)
+            pack_text = (root / ".vibe" / "context" / "PACK.md").read_text(encoding="utf-8")
+            self.assertIn("## Commands", pack_text)
+            self.assertIn("- Doctor: `python3 scripts/vibe.py doctor --full`", pack_text)
+            self.assertIn("- Search: `python3 scripts/vibe.py search <query>`", pack_text)
+            self.assertIn("- Tests: `python3 -m unittest discover -s tests -p 'test*.py' -v`", pack_text)
+            self.assertNotIn("tests/XTranslatorAi.Tests/XTranslatorAi.Tests.csproj", pack_text)
+
+    def test_pack_commands_can_be_overridden_by_context_commands_config(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "keep.py").write_text("x = 1\n", encoding="utf-8")
+            rc, _stdout, _stderr = self._run_pack(
+                root,
+                context_commands={
+                    "doctor": "make doctor",
+                    "tests": "make test",
+                    "search": "make search QUERY=<query>",
+                },
+            )
+            self.assertEqual(rc, 0)
+            pack_text = (root / ".vibe" / "context" / "PACK.md").read_text(encoding="utf-8")
+            self.assertIn("- Doctor: `make doctor`", pack_text)
+            self.assertIn("- Tests: `make test`", pack_text)
+            self.assertIn("- Search: `make search QUERY=<query>`", pack_text)
 
 
 if __name__ == "__main__":

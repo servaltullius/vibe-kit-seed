@@ -76,7 +76,15 @@ DEFAULT_CONFIG = {
         "**/*.xml",
     ],
     "critical_tags": ["@critical", "CRITICAL:"],
-    "context": {"latest_file": ".vibe/context/LATEST_CONTEXT.md", "max_recent_files": 12},
+    "context": {
+        "latest_file": ".vibe/context/LATEST_CONTEXT.md",
+        "max_recent_files": 12,
+        "commands": {
+            "doctor": "python3 scripts/vibe.py doctor --full",
+            "tests": "python3 -m unittest discover -s tests -p 'test*.py' -v",
+            "search": "python3 scripts/vibe.py search <query>",
+        },
+    },
     "checks": {"doctor": [], "precommit": []},
     "quality_gates": {
         "cycle_block": True,

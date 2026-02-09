@@ -154,6 +154,79 @@ def _files_recent(con, limit: int) -> list[str]:
     return [r["path"] for r in rows]
 
 
+def _has_any_glob(root: Path, patterns: list[str]) -> bool:
+    for pattern in patterns:
+        try:
+            next(root.rglob(pattern))
+            return True
+        except StopIteration:
+            continue
+        except Exception:
+            continue
+    return False
+
+
+def _default_test_command(root: Path) -> str:
+    if _has_any_glob(root, ["*.sln", "*.csproj", "*.fsproj", "*.vbproj"]):
+        return "dotnet test"
+    if (root / "go.mod").exists():
+        return "go test ./..."
+    if (root / "Cargo.toml").exists():
+        return "cargo test"
+    if (root / "package.json").exists():
+        if (root / "pnpm-lock.yaml").exists():
+            return "pnpm test"
+        if (root / "yarn.lock").exists():
+            return "yarn test"
+        return "npm test"
+    if (root / "pom.xml").exists():
+        return "mvn test"
+    if any(
+        (root / p).exists()
+        for p in ("gradlew", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts")
+    ):
+        return "./gradlew test" if (root / "gradlew").exists() else "gradle test"
+    if (root / "pytest.ini").exists():
+        return "pytest -q"
+
+    pyproject = root / "pyproject.toml"
+    if pyproject.exists():
+        try:
+            text = pyproject.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            text = ""
+        if "[tool.pytest" in text:
+            return "pytest -q"
+
+    return "python3 -m unittest discover -s tests -p 'test*.py' -v"
+
+
+def _default_command_hints(root: Path) -> dict[str, str]:
+    has_vibe_cli = (root / "scripts" / "vibe.py").exists()
+    doctor_cmd = "python3 scripts/vibe.py doctor --full" if has_vibe_cli else _default_test_command(root)
+    search_cmd = "python3 scripts/vibe.py search <query>" if has_vibe_cli else "rg -n \"<query>\" ."
+    return {
+        "doctor": doctor_cmd,
+        "tests": _default_test_command(root),
+        "search": search_cmd,
+    }
+
+
+def _resolve_command_hints(cfg) -> dict[str, str]:
+    hints = _default_command_hints(cfg.root)
+    raw = getattr(cfg, "context_commands", None) or {}
+    if not isinstance(raw, dict):
+        return hints
+    for key, val in raw.items():
+        if not isinstance(key, str) or not isinstance(val, str):
+            continue
+        k = key.strip().lower()
+        v = val.strip()
+        if k in hints and v:
+            hints[k] = v
+    return hints
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description="Generate a compact context PACK.md for LLMs.")
     ap.add_argument("--scope", choices=["staged", "changed", "path", "recent"], default="staged")
@@ -266,9 +339,10 @@ def main(argv: list[str]) -> int:
 
         b.add("")
         b.add("## Commands")
-        b.add("- Full scan: `python3 scripts/vibe.py doctor --full`")
-        b.add("- Tests: `dotnet test tests/XTranslatorAi.Tests/XTranslatorAi.Tests.csproj -c Release`")
-        b.add("- Search: `python3 scripts/vibe.py search <query>`")
+        hints = _resolve_command_hints(cfg)
+        b.add(f"- Doctor: `{hints['doctor']}`")
+        b.add(f"- Tests: `{hints['tests']}`")
+        b.add(f"- Search: `{hints['search']}`")
         b.add("")
         b.add("## Notes")
         b.add("- Treat runtime placeholders/tokens as a contract (`<mag>`, `<dur>`, `__XT_*__`, `[pagebreak]`).")
