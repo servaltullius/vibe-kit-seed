@@ -57,6 +57,19 @@ jobs:
             fi
           }
 
+          validate_release_version() {
+            local value="$1"
+            local label="$2"
+
+            validate_component "${value}" "${label}"
+
+            if [[ ! "${value}" =~ ^v?[0-9][0-9A-Za-z._-]{0,127}$ ]]; then
+              echo "Invalid ${label}: ${value}"
+              echo "Expected semantic-like version starting with a digit, with optional single leading 'v' (e.g. 1.2.3 or v1.2.3)."
+              exit 1
+            fi
+          }
+
           if [[ "${REF_TYPE}" != "tag" ]]; then
             echo "This workflow must run from a tag ref."
             echo "Current ref: ${REF_TYPE}:${REF_NAME}"
@@ -64,11 +77,11 @@ jobs:
           fi
 
           release_tag="${REF_NAME}"
-          validate_component "${release_tag}" "release tag"
+          validate_release_version "${release_tag}" "release tag"
 
           if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
             version="${INPUT_VERSION}"
-            validate_component "${version}" "version"
+            validate_release_version "${version}" "version"
             if [[ "${version}" == v* ]]; then
               version="${version#v}"
             fi
@@ -78,6 +91,7 @@ jobs:
               exit 1
             fi
             validate_component "${version}" "normalized version"
+            validate_release_version "${version}" "normalized version"
 
             if [[ "${release_tag}" != "${version}" && "${release_tag}" != "v${version}" ]]; then
               echo "workflow_dispatch mismatch:"
@@ -92,7 +106,7 @@ jobs:
             else
               version="${release_tag}"
             fi
-            validate_component "${version}" "derived version"
+            validate_release_version "${version}" "derived version"
           fi
 
           out_dir="dist/${version}"
