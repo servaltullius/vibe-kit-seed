@@ -258,6 +258,11 @@ def main(argv: list[str]) -> int:
     p_agents_lint = agents_sub.add_parser("lint", help="Warn if AGENTS.md files are near/over the Codex size limit.")
     p_agents_lint.add_argument("--max-kb", type=int, default=32)
     p_agents_lint.add_argument("--fail", action="store_true")
+    p_agents_doctor = agents_sub.add_parser(
+        "doctor",
+        help="Check agent instruction files include vibe-kit first-action entrypoints.",
+    )
+    p_agents_doctor.add_argument("--fail", action="store_true")
 
     p_precommit = sub.add_parser("precommit", help="Run staged-only precommit chain (if git exists).")
     p_precommit.add_argument("--run-tests", action="store_true", help="Also run core tests (slower).")
@@ -398,6 +403,11 @@ def main(argv: list[str]) -> int:
             if args.fail:
                 lint_args.append("--fail")
             return _run(brain / "agents_lint.py", lint_args)
+        if args.agents_cmd == "doctor":
+            doctor_args: list[str] = []
+            if args.fail:
+                doctor_args.append("--fail")
+            return _run(brain / "agents_doctor.py", doctor_args)
         raise RuntimeError(f"unknown agents cmd: {args.agents_cmd}")
 
     raise RuntimeError(f"unknown cmd: {args.cmd}")

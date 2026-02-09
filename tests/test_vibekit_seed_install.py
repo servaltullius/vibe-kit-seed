@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import tempfile
 import unittest
@@ -162,7 +163,93 @@ class TestInstaller(unittest.TestCase):
             self.assertEqual(rc, 0)
             self.assertEqual((root / "scripts" / "vibe.py").read_text(encoding="utf-8"), "print('ok')\n")
 
+    def test_agent_all_writes_all_agent_instruction_files(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            seed = td_path / "VIBEKIT_SEED.md"
+            root = td_path / "target"
+            _make_seed_file(seed, {"scripts/vibe.py": b"print('ok')\n"})
+            expected = vsi._sha256_file(seed)
+
+            rc = vsi._install(
+                seed_md=seed,
+                root=root,
+                expected_seed_sha256=expected,
+                force=False,
+                apply=True,
+                agent="all",
+                run_setup=False,
+            )
+            self.assertEqual(rc, 0)
+            self.assertTrue((root / "AGENTS.md").exists())
+            self.assertTrue((root / "CLAUDE.md").exists())
+            self.assertTrue((root / "GEMINI.md").exists())
+            self.assertTrue((root / ".github" / "copilot-instructions.md").exists())
+            self.assertTrue((root / ".cursor" / "rules" / "vibekit.md").exists())
+
+
+class TestBootstrapHelpers(unittest.TestCase):
+    def test_parse_sha256sums_parses_expected_format(self) -> None:
+        content = (
+            "a" * 64
+            + "  VIBEKIT_SEED-1.2.2-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.md\n"
+            + "b" * 64
+            + "  vibekit_seed_install.py\n"
+        )
+        parsed = vsi._parse_sha256sums(content)
+        self.assertIn("vibekit_seed_install.py", parsed)
+        self.assertEqual(parsed["vibekit_seed_install.py"], "b" * 64)
+
+    def test_parse_sha256sums_rejects_invalid_line(self) -> None:
+        with self.assertRaises(ValueError):
+            vsi._parse_sha256sums("not-a-valid-line\n")
+
+    def test_resolve_release_assets_returns_seed_and_expected_sha(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            seed = base / "VIBEKIT_SEED-1.2.2-sample.md"
+            installer = base / "vibekit_seed_install.py"
+            seed.write_text("seed", encoding="utf-8")
+            installer.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+            seed_sha = hashlib.sha256(seed.read_bytes()).hexdigest()
+            installer_sha = hashlib.sha256(installer.read_bytes()).hexdigest()
+            (base / "SHA256SUMS").write_text(
+                f"{seed_sha}  {seed.name}\n{installer_sha}  vibekit_seed_install.py\n",
+                encoding="utf-8",
+            )
+
+            assets = vsi._resolve_release_assets(base)
+            self.assertEqual(assets.seed_md, seed)
+            self.assertEqual(assets.seed_sha256, seed_sha)
+            self.assertEqual(assets.installer_path, installer)
+
+    def test_global_hook_script_uses_marker_and_bootstrap(self) -> None:
+        script = vsi._build_global_post_checkout_hook_script(
+            python_executable="/usr/bin/python3",
+            installer_script="/opt/vibekit_seed_install.py",
+            release_repo="servaltullius/vibe-kit-seed",
+            marker_file=".vibekit.auto",
+            agent="codex",
+        )
+        self.assertIn(".vibekit.auto", script)
+        self.assertIn("bootstrap", script)
+        self.assertIn("--repo", script)
+        self.assertIn("servaltullius/vibe-kit-seed", script)
+        self.assertIn("--post-configure", script)
+        self.assertIn("--post-doctor", script)
+        self.assertIn("--write-ci-guard", script)
+
+    def test_ci_guard_workflow_includes_agents_doctor_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            written = vsi._write_ci_guard_workflow(root, force=False, apply=True)
+            self.assertTrue(written)
+            wf = root / ".github" / "workflows" / "vibekit-guard.yml"
+            self.assertTrue(wf.exists())
+            content = wf.read_text(encoding="utf-8")
+            self.assertIn("python3 scripts/vibe.py doctor --full", content)
+            self.assertIn("python3 scripts/vibe.py agents doctor --fail", content)
+
 
 if __name__ == "__main__":
     unittest.main()
-

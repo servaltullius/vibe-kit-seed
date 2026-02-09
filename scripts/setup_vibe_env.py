@@ -164,6 +164,9 @@ DEFAULT_AGENT_CHECKLIST = """# AGENT_CHECKLIST (vibe-kit)
 - (Optional) Configure repo-specific checks in `.vibe/config.json` (`checks.doctor`, `checks.precommit`).
 - (Optional) Make a compact context pack for an agent:
   - `python3 scripts/vibe.py pack --scope=staged|changed|path|recent --out .vibe/context/PACK.md`
+- (Optional) Validate agent entrypoints are wired:
+  - `python3 scripts/vibe.py agents doctor`
+  - CI/strict mode: `python3 scripts/vibe.py agents doctor --fail`
 
 ## While coding
 - Keep changes small and localized.

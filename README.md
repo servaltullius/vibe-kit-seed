@@ -35,6 +35,16 @@ GitHub Releases의 같은 릴리즈에서 아래 3개 파일을 내려받습니�
 - 참고: `--expected-seed-sha256`에는 seed 본문에 보이는 payload 해시가 아니라, `SHA256SUMS`의 seed 파일 해시(첫 컬럼)를 넣어야 합니다.
 - 에이전트에게 seed를 보여줄 때는 `VIBEKIT_PAYLOAD_BASE64_BEGIN/END` 사이 payload 블록은 제외하고 상단 안내만 전달하세요.
 
+전역 자동화(옵션):
+- 최신(또는 지정 태그) 릴리즈를 자동 다운로드/검증/설치:
+  - dry-run: `python3 vibekit_seed_install.py bootstrap --root .`
+  - apply: `python3 vibekit_seed_install.py bootstrap --root . --apply --run-setup --post-configure --post-doctor --post-hooks --write-ci-guard --agent all`
+  - 태그 고정 예시: `python3 vibekit_seed_install.py bootstrap --tag v1.2.3 --root . --apply`
+- 새 레포 자동 부트스트랩(옵트인 마커 방식):
+  - 전역 훅 설치: `python3 vibekit_seed_install.py install-global-hook`
+  - 프로젝트 루트에 `.vibekit.auto` 파일 생성 후 첫 checkout 시 자동 bootstrap
+  - 기본 동작: seed 설치 + setup/configure/doctor/hooks + `.github/workflows/vibekit-guard.yml` 작성
+
 설치 결과(요약):
 - target repo에 `.vibe/` + `scripts/vibe.py` 등이 **파일로만 설치**됩니다.
 - 설치기는 기본적으로 어떤 스크립트도 **자동 실행하지 않습니다**.
@@ -57,6 +67,8 @@ GitHub Releases의 같은 릴리즈에서 아래 3개 파일을 내려받습니�
   - (옵션) 포맷팅/대량 수정 커밋 노이즈 완화: `python3 scripts/vibe.py coupling --max-churn-per-commit 5000`
   - playbooks 문서: `.vibe/reports/decoupling_suggestions.md`
 - 에이전트에 주기 위한 요약팩: `python3 scripts/vibe.py pack --scope=staged|changed|path|recent --out .vibe/context/PACK.md`
+- 에이전트 지시문 진입점 점검: `python3 scripts/vibe.py agents doctor`
+  - CI/게이트용: `python3 scripts/vibe.py agents doctor --fail`
 - Git hook(선택): `python3 scripts/vibe.py hooks --install` (pre-commit에 `.vibe/brain/precommit.py` 연결)
 - 레포별 커스텀(선택): `.vibe/config.json`에서 `exclude_dirs`, `include_globs`, `quality_gates`, `checks` 등을 조정
 
@@ -145,7 +157,15 @@ Consumers can verify downloaded assets with GitHub CLI:
    - Note: `--expected-seed-sha256` must be the seed file hash from `SHA256SUMS` (not the internal payload hash shown inside the seed body).
    - If sharing with an AI agent, provide only the instruction/header section and exclude the base64 payload block between `VIBEKIT_PAYLOAD_BASE64_BEGIN/END`.
 
-4) After install (in the target repo), run:
+4) Optional global automation:
+   - One-shot bootstrap from Releases (download + checksum verify + install):
+     - `python3 vibekit_seed_install.py bootstrap --root . --apply --run-setup --post-configure --post-doctor --post-hooks --write-ci-guard --agent all`
+     - Pin a specific tag: `python3 vibekit_seed_install.py bootstrap --tag v1.2.3 --root . --apply`
+   - Install global opt-in hook for future repos:
+     - `python3 vibekit_seed_install.py install-global-hook`
+     - Add `.vibekit.auto` at repo root to enable auto-bootstrap on first checkout.
+
+5) After install (in the target repo), run:
    - (recommended once) `python3 scripts/vibe.py configure --apply`
    - `python3 scripts/vibe.py doctor --full`
 

@@ -11,6 +11,12 @@ This repo is a **publisher/distribution** repo for installing the **repo-local**
 - Build release assets: `python3 scripts/make_release_assets.py <version> --out-dir dist/<version> --force`
 - Keep changes minimal and security-focused (installer + seed format + allowlist + tests).
 
+## Agent startup
+- Read context entrypoint first: `.vibe/AGENT_CHECKLIST.md` (or `.vibe/context/LATEST_CONTEXT.md` if checklist is unavailable).
+- First action command:
+  - WSL/Linux: `python3 scripts/vibe.py doctor --full`
+  - Windows: `scripts\vibe.cmd doctor --full`
+
 ## Release flow (maintainers)
 - Follow: `RELEASE_CHECKLIST.md`
 - GitHub Release assets must include exactly:

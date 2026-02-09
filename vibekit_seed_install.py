@@ -7,8 +7,13 @@ import hashlib
 import io
 import os
 import re
+import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
+import textwrap
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from zipfile import ZipFile
 
@@ -32,6 +37,16 @@ ALLOWED_EXACT: set[str] = {
     ".vibe/context/PROFILE_GUIDE.md",
     ".vibe/brain/requirements.txt",
 }
+
+DEFAULT_RELEASE_REPO = "servaltullius/vibe-kit-seed"
+
+
+@dataclass(frozen=True)
+class ReleaseAssets:
+    seed_md: Path
+    seed_sha256: str
+    installer_path: Path
+    sha256sums_path: Path
 
 
 def _sha256_file(path: Path) -> str:
@@ -168,10 +183,265 @@ def _write_agent_instructions(root: Path, agent: str, *, force: bool, apply: boo
             "- Run: `python3 scripts/vibe.py doctor --full`\n",
         ),
     }
+    if agent == "all":
+        for key in ("codex", "claude", "copilot", "cursor", "gemini"):
+            rel, content = templates[key]
+            _safe_write(root / rel, content.encode("utf-8"), force=force, apply=apply)
+        return
     if agent not in templates:
-        raise SystemExit(f"unknown --agent: {agent}")
+        raise SystemExit(f"unknown --agent: {agent} (expected: codex|claude|copilot|cursor|gemini|all)")
     rel, content = templates[agent]
     _safe_write(root / rel, content.encode("utf-8"), force=force, apply=apply)
+
+
+def _parse_sha256sums(content: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for idx, raw in enumerate(content.splitlines(), start=1):
+        line = raw.strip()
+        if not line:
+            continue
+        m = re.match(r"^([0-9a-fA-F]{64})\s+\*?(.+)$", line)
+        if not m:
+            raise ValueError(f"invalid SHA256SUMS line {idx}: {raw!r}")
+        sha = m.group(1).lower()
+        name = m.group(2).strip()
+        if not name:
+            raise ValueError(f"invalid SHA256SUMS line {idx}: empty filename")
+        if name in out and out[name] != sha:
+            raise ValueError(f"conflicting SHA256SUMS entry for {name}")
+        out[name] = sha
+    return out
+
+
+def _resolve_release_assets(base_dir: Path) -> ReleaseAssets:
+    sums_path = base_dir / "SHA256SUMS"
+    if not sums_path.exists():
+        raise ValueError(f"missing SHA256SUMS in {base_dir}")
+    sums = _parse_sha256sums(sums_path.read_text(encoding="utf-8", errors="ignore"))
+
+    seed_names = sorted(name for name in sums if name.startswith("VIBEKIT_SEED-") and name.endswith(".md"))
+    if len(seed_names) != 1:
+        raise ValueError(f"expected exactly one seed file in SHA256SUMS, found={len(seed_names)}")
+    seed_name = seed_names[0]
+    seed_path = base_dir / seed_name
+    if not seed_path.exists():
+        raise ValueError(f"missing seed file: {seed_name}")
+
+    installer_name = "vibekit_seed_install.py"
+    if installer_name not in sums:
+        raise ValueError("SHA256SUMS missing vibekit_seed_install.py")
+    installer_path = base_dir / installer_name
+    if not installer_path.exists():
+        raise ValueError(f"missing installer file: {installer_name}")
+
+    # Verify all declared files that are present in this download directory.
+    for name, expected in sums.items():
+        p = base_dir / name
+        if not p.exists():
+            continue
+        actual = _sha256_file(p)
+        if actual != expected:
+            raise ValueError(f"sha256 mismatch: {name} expected={expected} actual={actual}")
+
+    return ReleaseAssets(
+        seed_md=seed_path,
+        seed_sha256=sums[seed_name],
+        installer_path=installer_path,
+        sha256sums_path=sums_path,
+    )
+
+
+def _write_ci_guard_workflow(root: Path, *, force: bool, apply: bool) -> bool:
+    rel = Path(".github/workflows/vibekit-guard.yml")
+    path = root / rel
+    if path.exists() and not force:
+        return False
+    if not apply:
+        return True
+    path.parent.mkdir(parents=True, exist_ok=True)
+    content = textwrap.dedent(
+        """\
+        name: vibekit-guard
+        on:
+          pull_request:
+          push:
+            branches: [main]
+
+        jobs:
+          vibe:
+            runs-on: ubuntu-latest
+            steps:
+              - uses: actions/checkout@v4
+              - uses: actions/setup-python@v5
+                with:
+                  python-version: "3.x"
+              - name: Configure vibe-kit
+                run: python3 scripts/vibe.py configure --apply
+              - name: Run vibe doctor
+                run: python3 scripts/vibe.py doctor --full
+              - name: Validate agent instructions
+                run: python3 scripts/vibe.py agents doctor --fail
+        """
+    )
+    path.write_text(content, encoding="utf-8")
+    return True
+
+
+def _run_vibe(root: Path, args: list[str]) -> None:
+    vibe = root / "scripts" / "vibe.py"
+    if not vibe.exists():
+        raise RuntimeError("scripts/vibe.py not found after installation")
+    subprocess.check_call([sys.executable, str(vibe), *args], cwd=str(root))
+
+
+def _bootstrap(
+    *,
+    root: Path,
+    release_repo: str,
+    release_tag: str | None,
+    force: bool,
+    apply: bool,
+    agent: str | None,
+    run_setup: bool,
+    post_configure: bool,
+    post_doctor: bool,
+    post_hooks: bool,
+    write_ci_guard: bool,
+) -> int:
+    root = root.resolve()
+    if shutil.which("gh") is None:
+        print("[bootstrap] missing `gh` CLI. Install GitHub CLI first.", file=sys.stderr)
+        return 2
+
+    with tempfile.TemporaryDirectory(prefix="vibekit-bootstrap-") as td:
+        dl = Path(td)
+        cmd = [
+            "gh",
+            "release",
+            "download",
+            "--repo",
+            release_repo,
+            "--pattern",
+            "VIBEKIT_SEED-*.md",
+            "--pattern",
+            "vibekit_seed_install.py",
+            "--pattern",
+            "SHA256SUMS",
+            "--dir",
+            str(dl),
+        ]
+        if release_tag:
+            cmd.insert(3, release_tag)
+        try:
+            subprocess.check_call(cmd)
+            assets = _resolve_release_assets(dl)
+        except (subprocess.CalledProcessError, ValueError) as e:
+            print(f"[bootstrap] failed to download/verify release assets: {e}", file=sys.stderr)
+            return 2
+
+        rc = _install(
+            seed_md=assets.seed_md,
+            root=root,
+            expected_seed_sha256=assets.seed_sha256,
+            force=force,
+            apply=apply,
+            agent=agent,
+            run_setup=run_setup,
+        )
+        if rc != 0:
+            return rc
+
+        if write_ci_guard:
+            written = _write_ci_guard_workflow(root, force=force, apply=apply)
+            if written:
+                print("[bootstrap] wrote: .github/workflows/vibekit-guard.yml")
+            else:
+                print("[bootstrap] ci guard exists (use --force to overwrite)")
+
+        if apply:
+            try:
+                if post_configure:
+                    _run_vibe(root, ["configure", "--apply"])
+                if post_doctor:
+                    _run_vibe(root, ["doctor", "--full"])
+                if post_hooks:
+                    _run_vibe(root, ["hooks", "--install"])
+            except (subprocess.CalledProcessError, RuntimeError) as e:
+                print(f"[bootstrap] post-install step failed: {e}", file=sys.stderr)
+                return 2
+
+    return 0
+
+
+def _default_template_dir() -> Path:
+    try:
+        out = subprocess.check_output(["git", "config", "--global", "--get", "init.templateDir"], text=True).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        out = ""
+    if out:
+        return Path(os.path.expanduser(out))
+    return Path("~/.git-template").expanduser()
+
+
+def _build_global_post_checkout_hook_script(
+    *,
+    python_executable: str,
+    installer_script: str,
+    release_repo: str,
+    marker_file: str,
+    agent: str,
+) -> str:
+    marker = marker_file.strip() or ".vibekit.auto"
+    py_q = shlex.quote(python_executable)
+    installer_q = shlex.quote(installer_script)
+    repo_q = shlex.quote(release_repo)
+    agent_q = shlex.quote(agent)
+    return textwrap.dedent(
+        f"""\
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        repo="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+        if [ -z "$repo" ]; then
+          exit 0
+        fi
+        if [ ! -f "$repo/{marker}" ]; then
+          exit 0
+        fi
+        if [ -f "$repo/.vibe/config.json" ]; then
+          exit 0
+        fi
+
+        {py_q} {installer_q} bootstrap --root "$repo" --repo {repo_q} --apply --agent {agent_q} --run-setup --post-configure --post-doctor --post-hooks --write-ci-guard || true
+        """
+    )
+
+
+def _install_global_hook(
+    *,
+    template_dir: Path,
+    hook_script: str,
+    force: bool,
+) -> int:
+    template_dir = template_dir.expanduser().resolve()
+    hooks_dir = template_dir / "hooks"
+    hook_path = hooks_dir / "post-checkout"
+
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+    if hook_path.exists() and not force:
+        print(f"[global-hook] exists: {hook_path} (use --force to overwrite)")
+        return 0
+
+    hook_path.write_text(hook_script, encoding="utf-8", newline="\n")
+    mode = hook_path.stat().st_mode
+    hook_path.chmod(mode | 0o111)
+
+    subprocess.check_call(["git", "config", "--global", "init.templateDir", str(template_dir)])
+
+    print(f"[global-hook] installed: {hook_path}")
+    print(f"[global-hook] configured: git init.templateDir={template_dir}")
+    print("[global-hook] opt-in per repo by creating `.vibekit.auto` in that repo root.")
+    return 0
 
 
 def _install(
@@ -269,13 +539,42 @@ def main(argv: list[str]) -> int:
     )
     p_install.add_argument(
         "--agent",
-        help="Generate one agent instruction file (optional): codex|claude|copilot|cursor|gemini",
+        help="Generate agent instruction files (optional): codex|claude|copilot|cursor|gemini|all",
     )
     p_install.add_argument(
         "--run-setup",
         action="store_true",
         help="After extraction, run scripts/setup_vibe_env.py (explicit opt-in).",
     )
+    p_boot = sub.add_parser(
+        "bootstrap",
+        help="Download the latest (or tagged) release assets, verify checksums, and install into a repo.",
+    )
+    p_boot.add_argument("--root", type=Path, default=Path("."), help="Install root (project directory).")
+    p_boot.add_argument("--repo", default=DEFAULT_RELEASE_REPO, help="GitHub repo in OWNER/REPO format.")
+    p_boot.add_argument("--tag", help="Release tag to download (default: latest).")
+    p_boot.add_argument("--force", action="store_true", help="Overwrite existing files.")
+    p_boot.add_argument("--apply", action="store_true", help="Actually write files (default is dry-run).")
+    p_boot.add_argument("--agent", help="Generate agent instruction files: codex|claude|copilot|cursor|gemini|all")
+    p_boot.add_argument("--run-setup", action="store_true", help="Run scripts/setup_vibe_env.py after install.")
+    p_boot.add_argument("--post-configure", action="store_true", help="Run `python3 scripts/vibe.py configure --apply`.")
+    p_boot.add_argument("--post-doctor", action="store_true", help="Run `python3 scripts/vibe.py doctor --full`.")
+    p_boot.add_argument("--post-hooks", action="store_true", help="Run `python3 scripts/vibe.py hooks --install`.")
+    p_boot.add_argument(
+        "--write-ci-guard",
+        action="store_true",
+        help="Write `.github/workflows/vibekit-guard.yml` in target repo.",
+    )
+
+    p_global = sub.add_parser(
+        "install-global-hook",
+        help="Install a global git template post-checkout hook for opt-in auto-bootstrap.",
+    )
+    p_global.add_argument("--template-dir", type=Path, help="Global git template directory (default: init.templateDir or ~/.git-template).")
+    p_global.add_argument("--repo", default=DEFAULT_RELEASE_REPO, help="GitHub repo in OWNER/REPO format.")
+    p_global.add_argument("--agent", default="all", help="Agent file set to generate during bootstrap.")
+    p_global.add_argument("--marker-file", default=".vibekit.auto", help="Opt-in marker file name in project root.")
+    p_global.add_argument("--force", action="store_true", help="Overwrite existing post-checkout hook.")
 
     args = ap.parse_args(argv)
 
@@ -293,6 +592,36 @@ def main(argv: list[str]) -> int:
             agent=args.agent,
             run_setup=bool(args.run_setup),
         )
+
+    if args.cmd == "bootstrap":
+        return _bootstrap(
+            root=args.root,
+            release_repo=args.repo,
+            release_tag=args.tag,
+            force=bool(args.force),
+            apply=bool(args.apply),
+            agent=args.agent,
+            run_setup=bool(args.run_setup),
+            post_configure=bool(args.post_configure),
+            post_doctor=bool(args.post_doctor),
+            post_hooks=bool(args.post_hooks),
+            write_ci_guard=bool(args.write_ci_guard),
+        )
+
+    if args.cmd == "install-global-hook":
+        template_dir = args.template_dir or _default_template_dir()
+        hook_script = _build_global_post_checkout_hook_script(
+            python_executable=sys.executable,
+            installer_script=str(Path(__file__).resolve()),
+            release_repo=args.repo,
+            marker_file=args.marker_file,
+            agent=args.agent,
+        )
+        try:
+            return _install_global_hook(template_dir=template_dir, hook_script=hook_script, force=bool(args.force))
+        except (subprocess.CalledProcessError, OSError) as e:
+            print(f"[global-hook] failed: {e}", file=sys.stderr)
+            return 2
 
     raise RuntimeError(f"unknown cmd: {args.cmd}")
 

@@ -69,6 +69,21 @@ class TestVibeBoundariesCLI(unittest.TestCase):
             forwarded_args = run_mock.call_args[0][1]
             self.assertIn("--strict", forwarded_args)
 
+    def test_agents_doctor_flag_is_forwarded(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_config(root, rules=[])
+
+            with mock.patch.object(self.vibe, "_repo_root", return_value=root), mock.patch.object(self.vibe, "_run", return_value=0) as run_mock:
+                rc = self.vibe.main(["agents", "doctor", "--fail"])
+
+            self.assertEqual(rc, 0)
+            self.assertTrue(run_mock.called)
+            called_script = run_mock.call_args[0][0]
+            forwarded_args = run_mock.call_args[0][1]
+            self.assertTrue(str(called_script).endswith("agents_doctor.py"))
+            self.assertIn("--fail", forwarded_args)
+
 
 if __name__ == "__main__":
     unittest.main()
