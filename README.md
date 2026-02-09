@@ -115,6 +115,15 @@ What vibe-kit does **not** do:
 - **Source of truth:** GitHub Releases (tagged versions)
 - **Mirror:** Google Drive (optional). Treat as untrusted; always verify against the GitHub Release SHA256.
 
+### Release provenance attestation
+
+This repo also supports GitHub artifact provenance attestation for release assets via `.github/workflows/release-attestation.yml` (`actions/attest-build-provenance@v3`).
+
+Consumers can verify downloaded assets with GitHub CLI:
+- `gh attestation verify ./VIBEKIT_SEED-<version>-<sha256>.md -R <owner>/<repo>`
+- `gh attestation verify ./vibekit_seed_install.py -R <owner>/<repo>`
+- `gh attestation verify ./SHA256SUMS -R <owner>/<repo>`
+
 ## Install (from a GitHub Release)
 
 1) Download these assets from the same Release:

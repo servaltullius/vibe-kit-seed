@@ -1,0 +1,90 @@
+name: release-attestation
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (example: 1.2.3)"
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  attestations: write
+  contents: read
+
+jobs:
+  build-and-attest:
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ github.event.inputs.version }}
+      OUT_DIR: dist/${{ github.event.inputs.version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate version input
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "${VERSION}" =~ ^[0-9A-Za-z._-]+$ ]]; then
+            echo "Invalid version: ${VERSION}"
+            echo "Allowed characters: A-Z, a-z, 0-9, dot(.), underscore(_), hyphen(-)"
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONNOUSERSITE=1 python3 scripts/make_release_assets.py "${VERSION}" --out-dir "${OUT_DIR}" --force
+
+      - name: Resolve generated asset paths
+        id: assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          seed_files=( "${OUT_DIR}"/VIBEKIT_SEED-"${VERSION}"-*.md )
+          if [[ "${#seed_files[@]}" -ne 1 ]]; then
+            echo "Expected exactly 1 seed file in ${OUT_DIR}, found ${#seed_files[@]}"
+            ls -la "${OUT_DIR}"
+            exit 1
+          fi
+
+          seed_file="${seed_files[0]}"
+          installer_file="${OUT_DIR}/vibekit_seed_install.py"
+          checksums_file="${OUT_DIR}/SHA256SUMS"
+
+          test -f "${seed_file}"
+          test -f "${installer_file}"
+          test -f "${checksums_file}"
+
+          {
+            echo "seed_file=${seed_file}"
+            echo "installer_file=${installer_file}"
+            echo "checksums_file=${checksums_file}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Upload release assets (workflow artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-${{ github.event.inputs.version }}
+          path: |
+            ${{ steps.assets.outputs.seed_file }}
+            ${{ steps.assets.outputs.installer_file }}
+            ${{ steps.assets.outputs.checksums_file }}
+          if-no-files-found: error
+
+      - name: Attest release assets
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: |
+            ${{ steps.assets.outputs.seed_file }}
+            ${{ steps.assets.outputs.installer_file }}
+            ${{ steps.assets.outputs.checksums_file }}
