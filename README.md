@@ -32,6 +32,8 @@ GitHub Releases의 같은 릴리즈에서 아래 3개 파일을 내려받습니�
 설치(권장: dry-run → apply):
 - dry-run: `python3 vibekit_seed_install.py install VIBEKIT_SEED-...md --root . --expected-seed-sha256 <sha256>`
 - apply: `python3 vibekit_seed_install.py install VIBEKIT_SEED-...md --root . --expected-seed-sha256 <sha256> --apply`
+- 참고: `--expected-seed-sha256`에는 seed 본문에 보이는 payload 해시가 아니라, `SHA256SUMS`의 seed 파일 해시(첫 컬럼)를 넣어야 합니다.
+- 에이전트에게 seed를 보여줄 때는 `VIBEKIT_PAYLOAD_BASE64_BEGIN/END` 사이 payload 블록은 제외하고 상단 안내만 전달하세요.
 
 설치 결과(요약):
 - target repo에 `.vibe/` + `scripts/vibe.py` 등이 **파일로만 설치**됩니다.
@@ -139,6 +141,8 @@ Consumers can verify downloaded assets with GitHub CLI:
 3) Install into a target repo directory (example):
    - Linux/macOS: `python3 vibekit_seed_install.py install VIBEKIT_SEED-...md --root . --expected-seed-sha256 <sha256> --apply`
    - Windows: `py vibekit_seed_install.py install VIBEKIT_SEED-...md --root . --expected-seed-sha256 <sha256> --apply`
+   - Note: `--expected-seed-sha256` must be the seed file hash from `SHA256SUMS` (not the internal payload hash shown inside the seed body).
+   - If sharing with an AI agent, provide only the instruction/header section and exclude the base64 payload block between `VIBEKIT_PAYLOAD_BASE64_BEGIN/END`.
 
 4) After install (in the target repo), run:
    - (recommended once) `python3 scripts/vibe.py configure --apply`

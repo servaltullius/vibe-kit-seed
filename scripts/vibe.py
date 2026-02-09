@@ -132,17 +132,22 @@ def _seed_render_markdown(payload_zip: bytes, included_files: list[str]) -> str:
         "- It is **not** an AI agent runner/sandbox.\n"
         "- It makes **no network/API calls** by default.\n\n"
         f"- Created: `{created}`\n"
-        f"- Payload sha256: `{sha}`\n\n"
+        f"- Payload zip sha256 (internal; not for `--expected-seed-sha256`): `{sha}`\n"
+        "- `--expected-seed-sha256` must be the SHA256 of this markdown seed file from `SHA256SUMS`.\n\n"
         "## Install\n\n"
         "Download `vibekit_seed_install.py` and `SHA256SUMS` from the same GitHub Release as this seed file.\n\n"
+        "Use the exact seed filename you downloaded (typically `VIBEKIT_SEED-<version>-<sha256>.md`).\n\n"
         "**Linux/macOS:**\n\n"
         "1) Verify: `sha256sum -c SHA256SUMS`\n"
-        "2) Dry-run: `python3 vibekit_seed_install.py install VIBEKIT_SEED.md --root . --expected-seed-sha256 <sha256>`\n"
-        "3) Apply: `python3 vibekit_seed_install.py install VIBEKIT_SEED.md --root . --expected-seed-sha256 <sha256> --apply`\n\n"
+        "2) Dry-run: `python3 vibekit_seed_install.py install <seed-file> --root . --expected-seed-sha256 <seed-file-sha256>`\n"
+        "3) Apply: `python3 vibekit_seed_install.py install <seed-file> --root . --expected-seed-sha256 <seed-file-sha256> --apply`\n\n"
         "**Windows (PowerShell):**\n\n"
-        "1) Verify: `Get-FileHash .\\VIBEKIT_SEED.md -Algorithm SHA256`\n"
-        "2) Dry-run: `py vibekit_seed_install.py install VIBEKIT_SEED.md --root . --expected-seed-sha256 <sha256>`\n"
-        "3) Apply: `py vibekit_seed_install.py install VIBEKIT_SEED.md --root . --expected-seed-sha256 <sha256> --apply`\n\n"
+        "1) Verify: `Get-FileHash .\\<seed-file> -Algorithm SHA256`\n"
+        "2) Dry-run: `py vibekit_seed_install.py install <seed-file> --root . --expected-seed-sha256 <seed-file-sha256>`\n"
+        "3) Apply: `py vibekit_seed_install.py install <seed-file> --root . --expected-seed-sha256 <seed-file-sha256> --apply`\n\n"
+        "## Agent-safe sharing (important)\n\n"
+        "If you show this seed to an AI agent, share only the instruction/header section.\n"
+        "Do not include the long base64 payload block between `VIBEKIT_PAYLOAD_BASE64_BEGIN/END`.\n\n"
         "> Tip: Add `--agent codex|claude|copilot|cursor|gemini` to generate one agent instruction file.\n\n"
         "## Included files\n\n"
         f"{file_list}\n\n"
@@ -244,7 +249,7 @@ def main(argv: list[str]) -> int:
     p_pack.add_argument("--symbols-per-file", type=int, default=5)
     p_pack.add_argument("--refresh-index", action="store_true")
 
-    p_seed = sub.add_parser("seed", help="Export a single-file `VIBEKIT_SEED.md` (portable bootstrap).")
+    p_seed = sub.add_parser("seed", help="Export a portable single-file seed markdown.")
     p_seed.add_argument("--out", default="VIBEKIT_SEED.md")
     p_seed.add_argument("--force", action="store_true", help="Overwrite output file if it exists.")
 

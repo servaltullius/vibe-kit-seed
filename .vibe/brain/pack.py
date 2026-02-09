@@ -346,7 +346,7 @@ def main(argv: list[str]) -> int:
         b.add(f"- Search: `{hints['search']}`")
         b.add("")
         b.add("## Notes")
-        b.add("- Treat runtime placeholders/tokens as a contract (`<mag>`, `<dur>`, `__XT_*__`, `[pagebreak]`).")
+        b.add("- Treat runtime placeholders/tokens as a contract (`<...>`, `{0}`, `%s`, `__TOKEN__`).")
 
         out_path = root / args.out
         out_path.parent.mkdir(parents=True, exist_ok=True)

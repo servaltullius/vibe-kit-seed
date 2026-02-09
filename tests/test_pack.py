@@ -180,7 +180,12 @@ class TestPackCommandHints(unittest.TestCase):
             self.assertIn("- Doctor: `python3 scripts/vibe.py doctor --full`", pack_text)
             self.assertIn("- Search: `python3 scripts/vibe.py search <query>`", pack_text)
             self.assertIn("- Tests: `python3 -m unittest discover -s tests -p 'test*.py' -v`", pack_text)
+            self.assertIn(
+                "- Treat runtime placeholders/tokens as a contract (`<...>`, `{0}`, `%s`, `__TOKEN__`).",
+                pack_text,
+            )
             self.assertNotIn("tests/XTranslatorAi.Tests/XTranslatorAi.Tests.csproj", pack_text)
+            self.assertNotIn("__XT_*__", pack_text)
 
     def test_pack_commands_can_be_overridden_by_context_commands_config(self) -> None:
         with tempfile.TemporaryDirectory() as td:
