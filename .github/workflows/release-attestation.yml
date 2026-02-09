@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version (example: 1.2.3). Must match the selected tag ref."
+        description: "Release version (example: 1.2.3 or v1.2.3). Must match the selected tag ref."
         required: true
         type: string
 
@@ -69,6 +69,10 @@ jobs:
           if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
             version="${INPUT_VERSION}"
             validate_component "${version}" "version"
+            if [[ "${version}" == v* ]]; then
+              version="${version#v}"
+            fi
+            validate_component "${version}" "normalized version"
 
             if [[ "${release_tag}" != "${version}" && "${release_tag}" != "v${version}" ]]; then
               echo "workflow_dispatch mismatch:"
