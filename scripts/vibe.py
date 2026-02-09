@@ -216,8 +216,16 @@ def main(argv: list[str]) -> int:
     p_bound.add_argument("--out", default=".vibe/reports/boundaries.json")
     p_bound.add_argument("--md-out", default=".vibe/reports/boundaries.md")
     p_bound.add_argument("--max-violations", type=int, default=200)
-    p_bound.add_argument("--strict", action="store_true", help="Fail when any boundary violation exists.")
-    p_bound.add_argument("--best-effort", action="store_true", help="Never fail the process (exit 0).")
+    p_bound.add_argument(
+        "--strict",
+        action="store_true",
+        help="Fail when any boundary violation exists (takes precedence over --best-effort).",
+    )
+    p_bound.add_argument(
+        "--best-effort",
+        action="store_true",
+        help="Never fail the process (exit 0); ignored when --strict is set.",
+    )
     p_bound.add_argument(
         "--init-template",
         action="store_true",

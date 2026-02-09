@@ -503,8 +503,16 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--out", default=".vibe/reports/boundaries.json")
     ap.add_argument("--md-out", default=".vibe/reports/boundaries.md")
     ap.add_argument("--max-violations", type=int, default=200)
-    ap.add_argument("--strict", action="store_true", help="Fail when any boundary violation exists.")
-    ap.add_argument("--best-effort", action="store_true", help="Never fail the process (exit 0).")
+    ap.add_argument(
+        "--strict",
+        action="store_true",
+        help="Fail when any boundary violation exists (takes precedence over --best-effort).",
+    )
+    ap.add_argument(
+        "--best-effort",
+        action="store_true",
+        help="Never fail the process (exit 0); ignored when --strict is set.",
+    )
     args = ap.parse_args(argv)
 
     cfg = load_config()

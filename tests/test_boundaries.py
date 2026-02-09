@@ -1,3 +1,5 @@
+import contextlib
+import io
 import sys
 import sqlite3
 import tempfile
@@ -114,6 +116,15 @@ class TestBoundaries(unittest.TestCase):
 
             self.assertEqual(rc_best_effort, 0)
             self.assertEqual(rc_strict, 1)
+
+    def test_help_documents_strict_precedence_over_best_effort(self) -> None:
+        stdout = io.StringIO()
+        with self.assertRaises(SystemExit) as cm, contextlib.redirect_stdout(stdout):
+            cb.main(["--help"])
+
+        self.assertEqual(cm.exception.code, 0)
+        normalized_help = " ".join(stdout.getvalue().split())
+        self.assertIn("ignored when --strict is set", normalized_help)
 
 
 if __name__ == "__main__":
