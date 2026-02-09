@@ -170,24 +170,30 @@ def main(argv: list[str]) -> int:
 
     con = connect()
     try:
+        if args.scope == "path" and not args.path:
+            print("[pack] --path is required for --scope=path", file=sys.stderr)
+            return 2
+
+        def _resolve_scope_files(scope_name: str) -> list[str]:
+            if scope_name == "staged":
+                return _files_staged(root)
+            if scope_name == "changed":
+                return _files_changed(root)
+            if scope_name == "recent":
+                return _files_recent(con, cfg.max_recent_files)
+            return _files_from_path(root, cfg, args.path)
+
         scope = args.scope
         if scope in ("staged", "changed") and not _git_available(root):
             print(f"[pack] scope={scope} requires git; falling back to scope=recent", file=sys.stderr)
             scope = "recent"
 
-        if scope == "staged":
-            rel_paths = _files_staged(root)
-        elif scope == "changed":
-            rel_paths = _files_changed(root)
-        elif scope == "recent":
-            rel_paths = _files_recent(con, cfg.max_recent_files)
-        else:
-            if not args.path:
-                print("[pack] --path is required for --scope=path", file=sys.stderr)
-                return 2
-            rel_paths = _files_from_path(root, cfg, args.path)
+        rel_paths = _filter_repo_files(root, cfg, _resolve_scope_files(scope))
+        if not rel_paths and scope in ("staged", "changed"):
+            print(f"[pack] scope={scope} resolved to no files; falling back to scope=recent", file=sys.stderr)
+            scope = "recent"
+            rel_paths = _filter_repo_files(root, cfg, _resolve_scope_files(scope))
 
-        rel_paths = _filter_repo_files(root, cfg, rel_paths)
         if not rel_paths:
             print("[pack] no matching files for scope", file=sys.stderr)
             return 2
