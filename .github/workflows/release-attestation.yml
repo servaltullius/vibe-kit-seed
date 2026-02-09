@@ -1,10 +1,14 @@
 name: release-attestation
 
 on:
+  push:
+    tags:
+      - "v*"
+      - "[0-9]*"
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version (example: 1.2.3)"
+        description: "Release version (example: 1.2.3). Must match the selected tag ref."
         required: true
         type: string
 
@@ -16,29 +20,89 @@ permissions:
 jobs:
   build-and-attest:
     runs-on: ubuntu-latest
-    env:
-      VERSION: ${{ github.event.inputs.version }}
-      OUT_DIR: dist/${{ github.event.inputs.version }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - name: Validate version input
+      - name: Resolve and validate release inputs
+        id: release
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         shell: bash
         run: |
           set -euo pipefail
-          if [[ ! "${VERSION}" =~ ^[0-9A-Za-z._-]+$ ]]; then
-            echo "Invalid version: ${VERSION}"
-            echo "Allowed characters: A-Z, a-z, 0-9, dot(.), underscore(_), hyphen(-)"
+
+          validate_component() {
+            local value="$1"
+            local label="$2"
+
+            if [[ -z "${value}" ]]; then
+              echo "${label} must not be empty"
+              exit 1
+            fi
+
+            if [[ ! "${value}" =~ ^[0-9A-Za-z][0-9A-Za-z._-]{0,127}$ ]]; then
+              echo "Invalid ${label}: ${value}"
+              echo "Allowed: 1-128 chars, start with [A-Za-z0-9], then [A-Za-z0-9._-]"
+              exit 1
+            fi
+
+            if [[ "${value}" == *".."* || "${value}" == *"/"* || "${value}" == *"\\"* ]]; then
+              echo "Invalid ${label}: ${value}"
+              echo "Path-like values are not allowed ('..', '/', '\\')."
+              exit 1
+            fi
+          }
+
+          if [[ "${REF_TYPE}" != "tag" ]]; then
+            echo "This workflow must run from a tag ref."
+            echo "Current ref: ${REF_TYPE}:${REF_NAME}"
             exit 1
           fi
 
+          release_tag="${REF_NAME}"
+          validate_component "${release_tag}" "release tag"
+
+          if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+            version="${INPUT_VERSION}"
+            validate_component "${version}" "version"
+
+            if [[ "${release_tag}" != "${version}" && "${release_tag}" != "v${version}" ]]; then
+              echo "workflow_dispatch mismatch:"
+              echo "  selected tag ref: ${release_tag}"
+              echo "  input version:    ${version}"
+              echo "Expected tag ref '${version}' or 'v${version}'."
+              exit 1
+            fi
+          else
+            if [[ "${release_tag}" == v* ]]; then
+              version="${release_tag#v}"
+            else
+              version="${release_tag}"
+            fi
+            validate_component "${version}" "derived version"
+          fi
+
+          out_dir="dist/${version}"
+
+          {
+            echo "release_tag=${release_tag}"
+            echo "version=${version}"
+            echo "out_dir=${out_dir}"
+          } >> "${GITHUB_OUTPUT}"
+
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"
 
       - name: Build release assets
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          OUT_DIR: ${{ steps.release.outputs.out_dir }}
         shell: bash
         run: |
           set -euo pipefail
@@ -46,6 +110,9 @@ jobs:
 
       - name: Resolve generated asset paths
         id: assets
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          OUT_DIR: ${{ steps.release.outputs.out_dir }}
         shell: bash
         run: |
           set -euo pipefail
@@ -72,9 +139,9 @@ jobs:
           } >> "${GITHUB_OUTPUT}"
 
       - name: Upload release assets (workflow artifact)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: release-assets-${{ github.event.inputs.version }}
+          name: release-assets-${{ steps.release.outputs.version }}
           path: |
             ${{ steps.assets.outputs.seed_file }}
             ${{ steps.assets.outputs.installer_file }}
@@ -82,7 +149,7 @@ jobs:
           if-no-files-found: error
 
       - name: Attest release assets
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@62fc1d596301d0ab9914e1fec14dc5c8d93f65cd # v3.2.0
         with:
           subject-path: |
             ${{ steps.assets.outputs.seed_file }}

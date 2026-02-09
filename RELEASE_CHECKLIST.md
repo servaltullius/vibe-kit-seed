@@ -19,19 +19,19 @@ This produces:
 
 ## 3) Generate provenance attestation (recommended)
 
-Use the workflow `.github/workflows/release-attestation.yml` (safe/manual trigger).
+Use the workflow `.github/workflows/release-attestation.yml`.
 
-1) In Actions, run `release-attestation` via `workflow_dispatch` with `version=<version>`.
-2) The workflow rebuilds `dist/<version>/` using `scripts/make_release_assets.py`.
-3) It attests the 3 release files with `actions/attest-build-provenance@v3`.
-4) It uploads `release-assets-<version>` as a workflow artifact for maintainer download.
+1) Preferred: push the release tag (`v<version>` or `<version>`). The workflow runs on tag push and attests artifacts from that exact tag commit.
+2) Manual fallback: run via `workflow_dispatch` **from the same tag ref**, with `version=<version>`.
+3) The workflow fails if `workflow_dispatch` `version` does not match the selected tag ref (`<version>` or `v<version>`).
+4) The workflow rebuilds `dist/<version>/` using `scripts/make_release_assets.py`, attests the 3 files, and uploads `release-assets-<version>` as a workflow artifact.
 
 Verification examples (consumer side, after downloading assets):
 
-- `gh attestation verify ./VIBEKIT_SEED-<version>-<sha256>.md -R <owner>/<repo>`
-- `gh attestation verify ./vibekit_seed_install.py -R <owner>/<repo>`
-- `gh attestation verify ./SHA256SUMS -R <owner>/<repo>`
-- Optional JSON output: `gh attestation verify ./SHA256SUMS -R <owner>/<repo> --format json`
+- `gh attestation verify ./VIBEKIT_SEED-<version>-<sha256>.md -R <owner>/<repo> --signer-workflow github.com/<owner>/<repo>/.github/workflows/release-attestation.yml`
+- `gh attestation verify ./vibekit_seed_install.py -R <owner>/<repo> --signer-workflow github.com/<owner>/<repo>/.github/workflows/release-attestation.yml`
+- `gh attestation verify ./SHA256SUMS -R <owner>/<repo> --signer-workflow github.com/<owner>/<repo>/.github/workflows/release-attestation.yml`
+- Optional stronger policy (pin tag too): `gh attestation verify ./SHA256SUMS -R <owner>/<repo> --signer-workflow github.com/<owner>/<repo>/.github/workflows/release-attestation.yml --source-ref refs/tags/<tag>`
 
 ## 4) Mirror to Google Drive (optional)
 

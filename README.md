@@ -117,12 +117,12 @@ What vibe-kit does **not** do:
 
 ### Release provenance attestation
 
-This repo also supports GitHub artifact provenance attestation for release assets via `.github/workflows/release-attestation.yml` (`actions/attest-build-provenance@v3`).
+This repo also supports GitHub artifact provenance attestation for release assets via `.github/workflows/release-attestation.yml` (`actions/attest-build-provenance@v3`). The workflow is tag-aware and enforces ref/version consistency for `workflow_dispatch`.
 
 Consumers can verify downloaded assets with GitHub CLI:
-- `gh attestation verify ./VIBEKIT_SEED-<version>-<sha256>.md -R <owner>/<repo>`
-- `gh attestation verify ./vibekit_seed_install.py -R <owner>/<repo>`
-- `gh attestation verify ./SHA256SUMS -R <owner>/<repo>`
+- `gh attestation verify ./VIBEKIT_SEED-<version>-<sha256>.md -R <owner>/<repo> --signer-workflow github.com/<owner>/<repo>/.github/workflows/release-attestation.yml`
+- `gh attestation verify ./vibekit_seed_install.py -R <owner>/<repo> --signer-workflow github.com/<owner>/<repo>/.github/workflows/release-attestation.yml`
+- `gh attestation verify ./SHA256SUMS -R <owner>/<repo> --signer-workflow github.com/<owner>/<repo>/.github/workflows/release-attestation.yml`
 
 ## Install (from a GitHub Release)
 
