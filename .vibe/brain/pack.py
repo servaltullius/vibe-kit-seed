@@ -202,12 +202,13 @@ def _default_test_command(root: Path) -> str:
 
 
 def _default_command_hints(root: Path) -> dict[str, str]:
+    test_cmd = _default_test_command(root)
     has_vibe_cli = (root / "scripts" / "vibe.py").exists()
-    doctor_cmd = "python3 scripts/vibe.py doctor --full" if has_vibe_cli else _default_test_command(root)
+    doctor_cmd = "python3 scripts/vibe.py doctor --full" if has_vibe_cli else test_cmd
     search_cmd = "python3 scripts/vibe.py search <query>" if has_vibe_cli else "rg -n \"<query>\" ."
     return {
         "doctor": doctor_cmd,
-        "tests": _default_test_command(root),
+        "tests": test_cmd,
         "search": search_cmd,
     }
 

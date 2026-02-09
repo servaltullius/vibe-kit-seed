@@ -200,6 +200,39 @@ class TestPackCommandHints(unittest.TestCase):
             self.assertIn("- Tests: `make test`", pack_text)
             self.assertIn("- Search: `make search QUERY=<query>`", pack_text)
 
+    def test_pack_tests_hint_falls_back_when_tests_key_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "keep.py").write_text("x = 1\n", encoding="utf-8")
+            (root / "package.json").write_text("{}", encoding="utf-8")
+            rc, _stdout, _stderr = self._run_pack(
+                root,
+                context_commands={
+                    "doctor": "python3 scripts/vibe.py doctor --full",
+                    "search": "python3 scripts/vibe.py search <query>",
+                },
+            )
+            self.assertEqual(rc, 0)
+            pack_text = (root / ".vibe" / "context" / "PACK.md").read_text(encoding="utf-8")
+            self.assertIn("- Tests: `npm test`", pack_text)
+
+    def test_pack_tests_hint_falls_back_when_tests_key_is_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "keep.py").write_text("x = 1\n", encoding="utf-8")
+            (root / "go.mod").write_text("module example.com/demo\n", encoding="utf-8")
+            rc, _stdout, _stderr = self._run_pack(
+                root,
+                context_commands={
+                    "doctor": "custom doctor",
+                    "tests": "   ",
+                    "search": "custom search",
+                },
+            )
+            self.assertEqual(rc, 0)
+            pack_text = (root / ".vibe" / "context" / "PACK.md").read_text(encoding="utf-8")
+            self.assertIn("- Tests: `go test ./...`", pack_text)
+
 
 if __name__ == "__main__":
     unittest.main()

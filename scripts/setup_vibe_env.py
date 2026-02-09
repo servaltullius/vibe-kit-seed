@@ -81,7 +81,6 @@ DEFAULT_CONFIG = {
         "max_recent_files": 12,
         "commands": {
             "doctor": "python3 scripts/vibe.py doctor --full",
-            "tests": "python3 -m unittest discover -s tests -p 'test*.py' -v",
             "search": "python3 scripts/vibe.py search <query>",
         },
     },
