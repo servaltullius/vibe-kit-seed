@@ -21,10 +21,10 @@ This produces:
 
 Use the workflow `.github/workflows/release-attestation.yml`.
 
-1) Preferred: push the release tag (`v<version>` or `<version>`). The workflow runs on tag push and attests artifacts from that exact tag commit.
-2) Manual fallback: run via `workflow_dispatch` **from the same tag ref**, with `version=<version>`.
-3) The workflow fails if `workflow_dispatch` `version` does not match the selected tag ref (`<version>` or `v<version>`).
-4) The workflow rebuilds `dist/<version>/` using `scripts/make_release_assets.py`, attests the 3 files, and uploads `release-assets-<version>` as a workflow artifact.
+1) Preferred: publish the GitHub Release first. The workflow runs on `release.published` and downloads those exact uploaded assets.
+2) Manual fallback: run via `workflow_dispatch` with `release_tag=<tag>` (e.g. `v1.2.3` or `1.2.3`) to attest an existing Release.
+3) The workflow attests the downloaded Release assets (no rebuild), then uploads the same files as `release-assets-<version>` workflow artifact.
+4) This guarantees attestation subjects match what users actually download from GitHub Releases.
 
 Verification examples (consumer side, after downloading assets):
 

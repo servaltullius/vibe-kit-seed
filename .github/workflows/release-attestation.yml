@@ -1,14 +1,13 @@
 name: release-attestation
 
 on:
-  push:
-    tags:
-      - "v*"
-      - "[0-9]*"
+  release:
+    types:
+      - published
   workflow_dispatch:
     inputs:
-      version:
-        description: "Release version (example: 1.2.3 or v1.2.3). Must match the selected tag ref."
+      release_tag:
+        description: "Release tag to attest (example: v1.2.3 or 1.2.3)."
         required: true
         type: string
 
@@ -18,7 +17,7 @@ permissions:
   contents: read
 
 jobs:
-  build-and-attest:
+  attest-release-assets:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -28,9 +27,8 @@ jobs:
         id: release
         env:
           EVENT_NAME: ${{ github.event_name }}
-          REF_TYPE: ${{ github.ref_type }}
-          REF_NAME: ${{ github.ref_name }}
-          INPUT_VERSION: ${{ github.event.inputs.version }}
+          RELEASE_TAG_EVENT: ${{ github.event.release.tag_name }}
+          RELEASE_TAG_INPUT: ${{ github.event.inputs.release_tag }}
         shell: bash
         run: |
           set -euo pipefail
@@ -70,44 +68,16 @@ jobs:
             fi
           }
 
-          if [[ "${REF_TYPE}" != "tag" ]]; then
-            echo "This workflow must run from a tag ref."
-            echo "Current ref: ${REF_TYPE}:${REF_NAME}"
-            exit 1
+          if [[ "${EVENT_NAME}" == "release" ]]; then
+            release_tag="${RELEASE_TAG_EVENT}"
+          else
+            release_tag="${RELEASE_TAG_INPUT}"
           fi
 
-          release_tag="${REF_NAME}"
           validate_release_version "${release_tag}" "release tag"
 
-          if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
-            version="${INPUT_VERSION}"
-            validate_release_version "${version}" "version"
-            if [[ "${version}" == v* ]]; then
-              version="${version#v}"
-            fi
-            if [[ "${version}" == v* ]]; then
-              echo "Invalid version: ${INPUT_VERSION}"
-              echo "At most one leading 'v' is allowed (e.g. 1.2.3 or v1.2.3)."
-              exit 1
-            fi
-            validate_component "${version}" "normalized version"
-            validate_release_version "${version}" "normalized version"
-
-            if [[ "${release_tag}" != "${version}" && "${release_tag}" != "v${version}" ]]; then
-              echo "workflow_dispatch mismatch:"
-              echo "  selected tag ref: ${release_tag}"
-              echo "  input version:    ${version}"
-              echo "Expected tag ref '${version}' or 'v${version}'."
-              exit 1
-            fi
-          else
-            if [[ "${release_tag}" == v* ]]; then
-              version="${release_tag#v}"
-            else
-              version="${release_tag}"
-            fi
-            validate_release_version "${version}" "derived version"
-          fi
+          version="${release_tag#v}"
+          validate_release_version "${version}" "derived version"
 
           out_dir="dist/${version}"
 
@@ -117,21 +87,25 @@ jobs:
             echo "out_dir=${out_dir}"
           } >> "${GITHUB_OUTPUT}"
 
-      - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-        with:
-          python-version: "3.11"
-
-      - name: Build release assets
+      - name: Download release assets from GitHub Release
         env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
           VERSION: ${{ steps.release.outputs.version }}
           OUT_DIR: ${{ steps.release.outputs.out_dir }}
         shell: bash
         run: |
           set -euo pipefail
-          PYTHONNOUSERSITE=1 python3 scripts/make_release_assets.py "${VERSION}" --out-dir "${OUT_DIR}" --force
+          mkdir -p "${OUT_DIR}"
 
-      - name: Resolve generated asset paths
+          gh release download "${RELEASE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --dir "${OUT_DIR}" \
+            --pattern "VIBEKIT_SEED-${VERSION}-*.md" \
+            --pattern "vibekit_seed_install.py" \
+            --pattern "SHA256SUMS"
+
+      - name: Resolve downloaded asset paths
         id: assets
         env:
           VERSION: ${{ steps.release.outputs.version }}
@@ -140,6 +114,7 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
+
           seed_files=( "${OUT_DIR}"/VIBEKIT_SEED-"${VERSION}"-*.md )
           if [[ "${#seed_files[@]}" -ne 1 ]]; then
             echo "Expected exactly 1 seed file in ${OUT_DIR}, found ${#seed_files[@]}"
@@ -161,7 +136,7 @@ jobs:
             echo "checksums_file=${checksums_file}"
           } >> "${GITHUB_OUTPUT}"
 
-      - name: Upload release assets (workflow artifact)
+      - name: Upload attested release assets (workflow artifact)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-assets-${{ steps.release.outputs.version }}
@@ -171,7 +146,7 @@ jobs:
             ${{ steps.assets.outputs.checksums_file }}
           if-no-files-found: error
 
-      - name: Attest release assets
+      - name: Attest downloaded release assets
         uses: actions/attest-build-provenance@62fc1d596301d0ab9914e1fec14dc5c8d93f65cd # v3.2.0
         with:
           subject-path: |
