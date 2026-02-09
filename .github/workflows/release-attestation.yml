@@ -72,6 +72,11 @@ jobs:
             if [[ "${version}" == v* ]]; then
               version="${version#v}"
             fi
+            if [[ "${version}" == v* ]]; then
+              echo "Invalid version: ${INPUT_VERSION}"
+              echo "At most one leading 'v' is allowed (e.g. 1.2.3 or v1.2.3)."
+              exit 1
+            fi
             validate_component "${version}" "normalized version"
 
             if [[ "${release_tag}" != "${version}" && "${release_tag}" != "v${version}" ]]; then
