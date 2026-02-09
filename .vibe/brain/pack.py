@@ -166,6 +166,30 @@ def _has_any_glob(root: Path, patterns: list[str]) -> bool:
     return False
 
 
+def _detect_node_package_manager(root: Path) -> str:
+    package_json = root / "package.json"
+    if package_json.exists():
+        try:
+            data = json.loads(package_json.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+        raw = data.get("packageManager")
+        if isinstance(raw, str) and raw.strip():
+            name = raw.strip().split("@", 1)[0].strip().lower()
+            if name in {"npm", "pnpm", "yarn", "bun"}:
+                return name
+
+    if (root / "bun.lock").exists() or (root / "bun.lockb").exists():
+        return "bun"
+    if (root / "pnpm-lock.yaml").exists():
+        return "pnpm"
+    if (root / "yarn.lock").exists():
+        return "yarn"
+    if (root / "package-lock.json").exists():
+        return "npm"
+    return "npm"
+
+
 def _default_test_command(root: Path) -> str:
     if _has_any_glob(root, ["*.sln", "*.csproj", "*.fsproj", "*.vbproj"]):
         return "dotnet test"
@@ -174,10 +198,13 @@ def _default_test_command(root: Path) -> str:
     if (root / "Cargo.toml").exists():
         return "cargo test"
     if (root / "package.json").exists():
-        if (root / "pnpm-lock.yaml").exists():
+        pm = _detect_node_package_manager(root)
+        if pm == "pnpm":
             return "pnpm test"
-        if (root / "yarn.lock").exists():
+        if pm == "yarn":
             return "yarn test"
+        if pm == "bun":
+            return "bun test"
         return "npm test"
     if (root / "pom.xml").exists():
         return "mvn test"

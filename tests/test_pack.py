@@ -221,6 +221,25 @@ class TestPackCommandHints(unittest.TestCase):
             pack_text = (root / ".vibe" / "context" / "PACK.md").read_text(encoding="utf-8")
             self.assertIn("- Tests: `npm test`", pack_text)
 
+    def test_pack_tests_hint_uses_package_manager_field_without_lockfile(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "keep.py").write_text("x = 1\n", encoding="utf-8")
+            (root / "package.json").write_text(
+                '{"name":"demo","version":"0.0.1","packageManager":"pnpm@9.0.0"}',
+                encoding="utf-8",
+            )
+            rc, _stdout, _stderr = self._run_pack(
+                root,
+                context_commands={
+                    "doctor": "python3 scripts/vibe.py doctor --full",
+                    "search": "python3 scripts/vibe.py search <query>",
+                },
+            )
+            self.assertEqual(rc, 0)
+            pack_text = (root / ".vibe" / "context" / "PACK.md").read_text(encoding="utf-8")
+            self.assertIn("- Tests: `pnpm test`", pack_text)
+
     def test_pack_tests_hint_falls_back_when_tests_key_is_empty(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

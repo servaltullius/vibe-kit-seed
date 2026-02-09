@@ -93,6 +93,7 @@ What vibe-kit does (in the *target* repo after install):
 ### vibe-kit commands (after install, in the target repo)
 
 - `python3 scripts/vibe.py configure --apply`: auto-detect repo stack and update `.vibe/config.json` (recommended once)
+  - typecheck recommendation auto-detection supports common stacks (`dotnet`, `node` with package manager, `go`, `rust`, `maven`, `gradle`, `mypy`/`pyright` when configured)
 - `python3 scripts/vibe.py doctor --full`: scan + reports, refresh `.vibe/context/LATEST_CONTEXT.md`
 - `python3 scripts/vibe.py search "<query>"`: full-text search in the local context DB
 - `python3 scripts/vibe.py pack --scope=...`: generate a compact `.vibe/context/PACK.md` for an agent
