@@ -5,12 +5,18 @@ import argparse
 import base64
 import hashlib
 import io
+import json
 import subprocess
 import sys
 import textwrap
 import time
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
+
+try:
+    from setup_vibe_env import ensure_boundaries_template
+except ModuleNotFoundError:
+    from scripts.setup_vibe_env import ensure_boundaries_template
 
 
 def _repo_root() -> Path:
@@ -28,6 +34,38 @@ def _ensure_bootstrap(root: Path) -> None:
 def _run(script: Path, argv: list[str]) -> int:
     root = _repo_root()
     return subprocess.call([sys.executable, str(script), *argv], cwd=str(root))
+
+
+def _init_boundaries_template(root: Path) -> int:
+    cfg_path = root / ".vibe" / "config.json"
+    try:
+        cfg_raw = cfg_path.read_text(encoding="utf-8")
+        cfg_data = json.loads(cfg_raw)
+    except FileNotFoundError:
+        print(f"[boundaries] missing config: {cfg_path}", file=sys.stderr)
+        return 2
+    except json.JSONDecodeError as e:
+        print(f"[boundaries] invalid JSON in {cfg_path}: {e}", file=sys.stderr)
+        return 2
+    except OSError as e:
+        print(f"[boundaries] failed to read {cfg_path}: {e}", file=sys.stderr)
+        return 2
+
+    if not isinstance(cfg_data, dict):
+        print(f"[boundaries] invalid config root (expected object): {cfg_path}", file=sys.stderr)
+        return 2
+
+    changed, reason = ensure_boundaries_template(cfg_data)
+    if changed:
+        try:
+            cfg_path.write_text(json.dumps(cfg_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        except OSError as e:
+            print(f"[boundaries] failed to write {cfg_path}: {e}", file=sys.stderr)
+            return 2
+        print(f"[boundaries] initialized starter template in {cfg_path}")
+    else:
+        print(f"[boundaries] template unchanged: {reason}")
+    return 0
 
 
 def _seed_collect_files(root: Path) -> list[Path]:
@@ -178,7 +216,13 @@ def main(argv: list[str]) -> int:
     p_bound.add_argument("--out", default=".vibe/reports/boundaries.json")
     p_bound.add_argument("--md-out", default=".vibe/reports/boundaries.md")
     p_bound.add_argument("--max-violations", type=int, default=200)
+    p_bound.add_argument("--strict", action="store_true", help="Fail when any boundary violation exists.")
     p_bound.add_argument("--best-effort", action="store_true", help="Never fail the process (exit 0).")
+    p_bound.add_argument(
+        "--init-template",
+        action="store_true",
+        help="Initialize starter architecture.rules in `.vibe/config.json` when rules are empty.",
+    )
 
     p_qa = sub.add_parser("qa", help="Placeholder QA for xTranslator XML.")
     p_qa.add_argument("xml_path")
@@ -286,11 +330,17 @@ def main(argv: list[str]) -> int:
         return _run(brain / "change_coupling.py", coup_args)
 
     if args.cmd == "boundaries":
+        if args.init_template:
+            rc = _init_boundaries_template(root)
+            if rc:
+                return rc
         bound_args = [
             f"--out={args.out}",
             f"--md-out={args.md_out}",
             f"--max-violations={args.max_violations}",
         ]
+        if args.strict:
+            bound_args.append("--strict")
         if args.best_effort:
             bound_args.append("--best-effort")
         return _run(brain / "check_boundaries.py", bound_args)

@@ -48,6 +48,8 @@ GitHub Releases의 같은 릴리즈에서 아래 3개 파일을 내려받습니�
 - 컨텍스트 DB 검색: `python3 scripts/vibe.py search "<query>"`
 - 영향도(간단) 분석: `python3 scripts/vibe.py impact <path>`
 - (설계/경계 점검) 아키텍처 경계 위반 체크: `python3 scripts/vibe.py boundaries` (config-driven)
+  - 시작 템플릿 생성(안전/멱등): `python3 scripts/vibe.py boundaries --init-template`
+  - 엄격 모드(위반 시 항상 non-zero): `python3 scripts/vibe.py boundaries --strict`
 - (설계/디커플링 도움) 변경 결합(change coupling): `python3 scripts/vibe.py coupling`
   - (옵션) 리네임/이동 보정: `python3 scripts/vibe.py coupling --detect-renames`
   - (옵션) 포맷팅/대량 수정 커밋 노이즈 완화: `python3 scripts/vibe.py coupling --max-churn-per-commit 5000`
@@ -94,6 +96,8 @@ What vibe-kit does (in the *target* repo after install):
 - `python3 scripts/vibe.py pack --scope=...`: generate a compact `.vibe/context/PACK.md` for an agent
 - `python3 scripts/vibe.py impact <path>`: quick impact analysis for a file
 - `python3 scripts/vibe.py boundaries`: boundary/architecture rule checker (config-driven)
+  - `python3 scripts/vibe.py boundaries --init-template`: write starter `architecture.rules` template into `.vibe/config.json` (safe/idempotent)
+  - `python3 scripts/vibe.py boundaries --strict`: return non-zero on any violation, even with `--best-effort`
 - `python3 scripts/vibe.py coupling`: change coupling report (files that tend to change together; useful for refactoring/decoupling)
 - `python3 scripts/vibe.py watch`: keep context refreshed while you work (watchdog if installed; otherwise polling)
 - `python3 scripts/vibe.py hooks --install`: optional git hook installer

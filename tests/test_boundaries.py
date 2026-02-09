@@ -1,7 +1,9 @@
 import sys
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,6 +16,7 @@ class _DummyCfg:
     def __init__(self, root: Path) -> None:
         self.root = root
         self.exclude_dirs: list[str] = []
+        self.include_globs: list[str] = ["**/*.py", "**/*.ts", "**/*.js"]
         self.architecture: dict = {"python_roots": ["src", "."], "js_aliases": {}}
         self.quality_gates: dict = {}
 
@@ -67,7 +70,51 @@ class TestBoundaries(unittest.TestCase):
             deps = list(cb._js_deps_for_file(cfg, from_rel="src/ui/a.ts", text=a.read_text(encoding="utf-8"), aliases={}))
             self.assertTrue(any(d.to_file == "src/infra/b.ts" and d.kind == "js_import" for d in deps))
 
+    def test_strict_mode_returns_nonzero_even_with_best_effort(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "src" / "domain").mkdir(parents=True, exist_ok=True)
+            (root / "src" / "infra").mkdir(parents=True, exist_ok=True)
+            (root / "src" / "domain" / "a.py").write_text("import infra.b\n", encoding="utf-8")
+            (root / "src" / "infra" / "b.py").write_text("x = 1\n", encoding="utf-8")
+
+            cfg = _DummyCfg(root)
+            cfg.architecture = {
+                "enabled": True,
+                "python_roots": ["src", "."],
+                "js_aliases": {},
+                "rules": [
+                    {
+                        "name": "no_domain_to_infra",
+                        "from_globs": ["src/domain/**"],
+                        "to_globs": ["src/infra/**"],
+                        "kinds": ["py_import", "py_from"],
+                        "reason": "domain must not depend on infra",
+                    }
+                ],
+            }
+            cfg.quality_gates = {"boundary_block": False}
+
+            files = ["src/domain/a.py", "src/infra/b.py"]
+
+            def _fake_connect() -> sqlite3.Connection:
+                con = sqlite3.connect(":memory:")
+                con.row_factory = sqlite3.Row
+                con.execute("CREATE TABLE files (path TEXT)")
+                con.execute("CREATE TABLE deps (from_file TEXT, to_file TEXT, kind TEXT)")
+                con.executemany("INSERT INTO files(path) VALUES (?)", ((p,) for p in files))
+                return con
+
+            out = root / "boundaries.json"
+            md_out = root / "boundaries.md"
+
+            with mock.patch.object(cb, "load_config", return_value=cfg), mock.patch.object(cb, "connect", side_effect=_fake_connect):
+                rc_best_effort = cb.main(["--out", str(out), "--md-out", str(md_out), "--best-effort"])
+                rc_strict = cb.main(["--out", str(out), "--md-out", str(md_out), "--best-effort", "--strict"])
+
+            self.assertEqual(rc_best_effort, 0)
+            self.assertEqual(rc_strict, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
-

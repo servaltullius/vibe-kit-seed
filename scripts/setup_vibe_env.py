@@ -110,6 +110,24 @@ DEFAULT_CONFIG = {
 }
 
 
+BOUNDARIES_TEMPLATE_RULES = [
+    {
+        "name": "no_domain_to_infra",
+        "from_globs": ["src/domain/**", "domain/**"],
+        "to_globs": ["src/infra/**", "infra/**"],
+        "kinds": ["py_import", "py_from", "js_import"],
+        "reason": "Domain logic should not depend on infrastructure internals.",
+    },
+    {
+        "name": "no_ui_to_infra",
+        "from_globs": ["src/ui/**", "ui/**", "src/presentation/**", "presentation/**"],
+        "to_globs": ["src/infra/**", "infra/**"],
+        "kinds": ["py_import", "py_from", "js_import"],
+        "reason": "UI/presentation should use app/domain entrypoints instead of infra internals.",
+    },
+]
+
+
 DEFAULT_REQUIREMENTS = """watchdog>=4.0.0
 python-dateutil>=2.8.2
 """
@@ -192,6 +210,32 @@ def _write_json_if_missing(path: Path, obj: object) -> bool:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return True
+
+
+def ensure_boundaries_template(config: dict) -> tuple[bool, str]:
+    """
+    Safely initialize starter architecture boundary rules.
+
+    - Idempotent: repeated calls do not duplicate rules.
+    - Non-destructive: existing non-empty architecture.rules are preserved.
+    """
+    arch = config.get("architecture")
+    if not isinstance(arch, dict):
+        arch = {}
+        config["architecture"] = arch
+
+    rules = arch.get("rules")
+    if isinstance(rules, list) and rules:
+        return False, "architecture.rules already configured; leaving existing rules unchanged"
+
+    arch.setdefault("enabled", True)
+    if not isinstance(arch.get("python_roots"), list) or not arch.get("python_roots"):
+        arch["python_roots"] = ["src", "."]
+    if not isinstance(arch.get("js_aliases"), dict):
+        arch["js_aliases"] = {}
+
+    arch["rules"] = json.loads(json.dumps(BOUNDARIES_TEMPLATE_RULES))
+    return True, f"added {len(BOUNDARIES_TEMPLATE_RULES)} starter architecture.rules entries"
 
 
 def main(argv: list[str]) -> int:
