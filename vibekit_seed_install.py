@@ -39,6 +39,10 @@ ALLOWED_EXACT: set[str] = {
 }
 
 DEFAULT_RELEASE_REPO = "servaltullius/vibe-kit-seed"
+DEFAULT_CODEX_HOME = Path("~/.codex").expanduser()
+CODEX_PROMPT_HEADER = "## Vibe-kit Auto-Prompt (Missing in Repo)"
+CODEX_PROMPT_START = "<!-- vibekit:auto-prompt:start -->"
+CODEX_PROMPT_END = "<!-- vibekit:auto-prompt:end -->"
 
 
 @dataclass(frozen=True)
@@ -388,6 +392,7 @@ def _build_global_post_checkout_hook_script(
     python_executable: str,
     installer_script: str,
     release_repo: str,
+    release_tag: str | None,
     marker_file: str,
     agent: str,
 ) -> str:
@@ -395,6 +400,7 @@ def _build_global_post_checkout_hook_script(
     py_q = shlex.quote(python_executable)
     installer_q = shlex.quote(installer_script)
     repo_q = shlex.quote(release_repo)
+    tag_part = f" --tag {shlex.quote(release_tag)}" if release_tag else ""
     agent_q = shlex.quote(agent)
     return textwrap.dedent(
         f"""\
@@ -412,9 +418,123 @@ def _build_global_post_checkout_hook_script(
           exit 0
         fi
 
-        {py_q} {installer_q} bootstrap --root "$repo" --repo {repo_q} --apply --agent {agent_q} --run-setup --post-configure --post-doctor --post-hooks --write-ci-guard || true
+        {py_q} {installer_q} bootstrap --root "$repo" --repo {repo_q}{tag_part} --apply --agent {agent_q} --run-setup --post-configure --post-doctor --post-hooks --write-ci-guard || true
         """
     )
+
+
+def _build_global_codex_vibekit_prompt_block(
+    *,
+    installer_script: str,
+    release_repo: str,
+    release_tag: str | None,
+    marker_file: str,
+    suppress_file: str,
+) -> str:
+    marker = marker_file.strip() or ".vibekit.auto"
+    suppress = suppress_file.strip() or ".vibekit.ignore"
+    installer_q = shlex.quote(installer_script)
+    repo_q = shlex.quote(release_repo)
+    tag_part = f" --tag {shlex.quote(release_tag)}" if release_tag else ""
+    cmd = (
+        f"python3 {installer_q} bootstrap --root . --repo {repo_q}{tag_part} "
+        "--apply --agent all --run-setup --post-configure --post-doctor --post-hooks --write-ci-guard"
+    )
+    return textwrap.dedent(
+        f"""\
+        {CODEX_PROMPT_START}
+        {CODEX_PROMPT_HEADER}
+        - At the start of each coding session, if the current working directory is inside a git repository and `.vibe/config.json` is missing:
+          - If `{suppress}` exists in repo root, do not ask.
+          - Ask exactly once: "이 프로젝트에 vibe-kit이 없습니다. 지금 설치할까요? (yes/no)"
+          - If user says `yes`:
+            - Run: `{cmd}`
+            - Create `{marker}` in repo root.
+          - If user says `no`:
+            - Create `{suppress}` in repo root to suppress repeated prompts.
+        {CODEX_PROMPT_END}
+        """
+    ).strip()
+
+
+def _read_text(path: Path) -> str:
+    if not path.exists():
+        return ""
+    return path.read_text(encoding="utf-8", errors="ignore")
+
+
+def _pick_codex_global_instructions_file(codex_home: Path) -> Path:
+    override = codex_home / "AGENTS.override.md"
+    if override.exists() and _read_text(override).strip():
+        return override
+    return codex_home / "AGENTS.md"
+
+
+def _install_codex_global_prompt(
+    *,
+    codex_home: Path,
+    installer_script: str,
+    release_repo: str,
+    release_tag: str | None,
+    marker_file: str,
+    suppress_file: str,
+    force: bool,
+) -> tuple[bool, Path]:
+    home = codex_home.expanduser().resolve()
+    home.mkdir(parents=True, exist_ok=True)
+    target = _pick_codex_global_instructions_file(home)
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    existing = _read_text(target)
+    block = _build_global_codex_vibekit_prompt_block(
+        installer_script=installer_script,
+        release_repo=release_repo,
+        release_tag=release_tag,
+        marker_file=marker_file,
+        suppress_file=suppress_file,
+    )
+    replacement = block + "\n"
+
+    start = existing.find(CODEX_PROMPT_START)
+    end = existing.find(CODEX_PROMPT_END)
+    if start != -1 and end != -1 and end > start:
+        if not force:
+            return False, target
+        end = end + len(CODEX_PROMPT_END)
+        updated = existing[:start].rstrip()
+        if updated:
+            updated += "\n\n"
+        updated += replacement
+        tail = existing[end:].lstrip("\n")
+        if tail:
+            updated += "\n" + tail
+        target.write_text(updated, encoding="utf-8", newline="\n")
+        return True, target
+
+    legacy = existing.find(CODEX_PROMPT_HEADER)
+    if legacy != -1:
+        if not force:
+            return False, target
+        next_heading = existing.find("\n## ", legacy + len(CODEX_PROMPT_HEADER))
+        tail = existing[next_heading + 1 :] if next_heading != -1 else ""
+        head = existing[:legacy].rstrip()
+        updated = head
+        if updated:
+            updated += "\n\n"
+        updated += replacement
+        if tail:
+            updated += "\n" + tail.lstrip("\n")
+        target.write_text(updated, encoding="utf-8", newline="\n")
+        return True, target
+
+    updated = existing
+    if updated and not updated.endswith("\n"):
+        updated += "\n"
+    if updated and not updated.endswith("\n\n"):
+        updated += "\n"
+    updated += replacement
+    target.write_text(updated, encoding="utf-8", newline="\n")
+    return True, target
 
 
 def _install_global_hook(
@@ -572,8 +692,17 @@ def main(argv: list[str]) -> int:
     )
     p_global.add_argument("--template-dir", type=Path, help="Global git template directory (default: init.templateDir or ~/.git-template).")
     p_global.add_argument("--repo", default=DEFAULT_RELEASE_REPO, help="GitHub repo in OWNER/REPO format.")
+    p_global.add_argument("--tag", help="Release tag to pin in global bootstrap commands (default: latest).")
     p_global.add_argument("--agent", default="all", help="Agent file set to generate during bootstrap.")
     p_global.add_argument("--marker-file", default=".vibekit.auto", help="Opt-in marker file name in project root.")
+    p_global.add_argument("--suppress-file", default=".vibekit.ignore", help="Per-repo marker file to suppress install prompt.")
+    p_global.add_argument("--codex-home", type=Path, default=DEFAULT_CODEX_HOME, help="Codex home directory for global AGENTS instructions.")
+    p_global.add_argument(
+        "--install-codex-prompt",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Install/update global Codex AGENTS prompt for missing vibe-kit repos.",
+    )
     p_global.add_argument("--force", action="store_true", help="Overwrite existing post-checkout hook.")
 
     args = ap.parse_args(argv)
@@ -614,11 +743,31 @@ def main(argv: list[str]) -> int:
             python_executable=sys.executable,
             installer_script=str(Path(__file__).resolve()),
             release_repo=args.repo,
+            release_tag=args.tag,
             marker_file=args.marker_file,
             agent=args.agent,
         )
         try:
-            return _install_global_hook(template_dir=template_dir, hook_script=hook_script, force=bool(args.force))
+            rc = _install_global_hook(template_dir=template_dir, hook_script=hook_script, force=bool(args.force))
+            if rc != 0:
+                return rc
+            if bool(args.install_codex_prompt):
+                changed, target = _install_codex_global_prompt(
+                    codex_home=args.codex_home,
+                    installer_script=str(Path(__file__).resolve()),
+                    release_repo=args.repo,
+                    release_tag=args.tag,
+                    marker_file=args.marker_file,
+                    suppress_file=args.suppress_file,
+                    force=bool(args.force),
+                )
+                if changed:
+                    print(f"[global-codex] installed: {target}")
+                else:
+                    print(f"[global-codex] unchanged: {target}")
+            else:
+                print("[global-codex] skipped (--no-install-codex-prompt)")
+            return 0
         except (subprocess.CalledProcessError, OSError) as e:
             print(f"[global-hook] failed: {e}", file=sys.stderr)
             return 2

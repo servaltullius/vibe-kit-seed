@@ -228,6 +228,7 @@ class TestBootstrapHelpers(unittest.TestCase):
             python_executable="/usr/bin/python3",
             installer_script="/opt/vibekit_seed_install.py",
             release_repo="servaltullius/vibe-kit-seed",
+            release_tag=None,
             marker_file=".vibekit.auto",
             agent="codex",
         )
@@ -249,6 +250,122 @@ class TestBootstrapHelpers(unittest.TestCase):
             content = wf.read_text(encoding="utf-8")
             self.assertIn("python3 scripts/vibe.py doctor --full", content)
             self.assertIn("python3 scripts/vibe.py agents doctor --fail", content)
+
+    def test_build_global_codex_prompt_block_contains_install_question_and_actions(self) -> None:
+        block = vsi._build_global_codex_vibekit_prompt_block(
+            installer_script="/opt/vibekit_seed_install.py",
+            release_repo="servaltullius/vibe-kit-seed",
+            release_tag="v1.2.3",
+            marker_file=".vibekit.auto",
+            suppress_file=".vibekit.ignore",
+        )
+        self.assertIn("이 프로젝트에 vibe-kit이 없습니다. 지금 설치할까요? (yes/no)", block)
+        self.assertIn("python3 /opt/vibekit_seed_install.py bootstrap", block)
+        self.assertIn("--repo servaltullius/vibe-kit-seed", block)
+        self.assertIn("--tag v1.2.3", block)
+        self.assertIn("Create `.vibekit.auto`", block)
+        self.assertIn("Create `.vibekit.ignore`", block)
+
+    def test_install_codex_prompt_prefers_override_when_non_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            (home / "AGENTS.override.md").write_text("# override\n", encoding="utf-8")
+            (home / "AGENTS.md").write_text("# base\n", encoding="utf-8")
+
+            changed, target = vsi._install_codex_global_prompt(
+                codex_home=home,
+                installer_script="/opt/vibekit_seed_install.py",
+                release_repo="servaltullius/vibe-kit-seed",
+                release_tag="v1.2.3",
+                marker_file=".vibekit.auto",
+                suppress_file=".vibekit.ignore",
+                force=False,
+            )
+
+            self.assertTrue(changed)
+            self.assertEqual(target, home / "AGENTS.override.md")
+            txt = (home / "AGENTS.override.md").read_text(encoding="utf-8")
+            self.assertIn("Vibe-kit Auto-Prompt (Missing in Repo)", txt)
+
+    def test_install_codex_prompt_falls_back_to_agents_when_override_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            (home / "AGENTS.override.md").write_text("\n", encoding="utf-8")
+            (home / "AGENTS.md").write_text("# base\n", encoding="utf-8")
+
+            changed, target = vsi._install_codex_global_prompt(
+                codex_home=home,
+                installer_script="/opt/vibekit_seed_install.py",
+                release_repo="servaltullius/vibe-kit-seed",
+                release_tag="v1.2.3",
+                marker_file=".vibekit.auto",
+                suppress_file=".vibekit.ignore",
+                force=False,
+            )
+
+            self.assertTrue(changed)
+            self.assertEqual(target, home / "AGENTS.md")
+            txt = (home / "AGENTS.md").read_text(encoding="utf-8")
+            self.assertIn("Vibe-kit Auto-Prompt (Missing in Repo)", txt)
+
+    def test_install_codex_prompt_is_idempotent_without_force(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            (home / "AGENTS.md").write_text("# base\n", encoding="utf-8")
+
+            changed1, target1 = vsi._install_codex_global_prompt(
+                codex_home=home,
+                installer_script="/opt/vibekit_seed_install.py",
+                release_repo="servaltullius/vibe-kit-seed",
+                release_tag="v1.2.3",
+                marker_file=".vibekit.auto",
+                suppress_file=".vibekit.ignore",
+                force=False,
+            )
+            changed2, target2 = vsi._install_codex_global_prompt(
+                codex_home=home,
+                installer_script="/opt/vibekit_seed_install.py",
+                release_repo="servaltullius/vibe-kit-seed",
+                release_tag="v1.2.3",
+                marker_file=".vibekit.auto",
+                suppress_file=".vibekit.ignore",
+                force=False,
+            )
+
+            self.assertTrue(changed1)
+            self.assertFalse(changed2)
+            self.assertEqual(target1, target2)
+            txt = (home / "AGENTS.md").read_text(encoding="utf-8")
+            self.assertEqual(txt.count("Vibe-kit Auto-Prompt (Missing in Repo)"), 1)
+
+    def test_install_codex_prompt_force_replaces_legacy_block_without_markers(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            legacy = (
+                "# base\n\n"
+                "## Vibe-kit Auto-Prompt (Missing in Repo)\n"
+                "- legacy text\n\n"
+                "## Another Section\n"
+                "- keep me\n"
+            )
+            (home / "AGENTS.md").write_text(legacy, encoding="utf-8")
+
+            changed, target = vsi._install_codex_global_prompt(
+                codex_home=home,
+                installer_script="/opt/vibekit_seed_install.py",
+                release_repo="servaltullius/vibe-kit-seed",
+                release_tag="v1.2.3",
+                marker_file=".vibekit.auto",
+                suppress_file=".vibekit.ignore",
+                force=True,
+            )
+
+            self.assertTrue(changed)
+            self.assertEqual(target, home / "AGENTS.md")
+            txt = (home / "AGENTS.md").read_text(encoding="utf-8")
+            self.assertEqual(txt.count("Vibe-kit Auto-Prompt (Missing in Repo)"), 1)
+            self.assertIn("<!-- vibekit:auto-prompt:start -->", txt)
+            self.assertIn("## Another Section", txt)
 
 
 if __name__ == "__main__":

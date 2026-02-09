@@ -44,6 +44,10 @@ GitHub Releases의 같은 릴리즈에서 아래 3개 파일을 내려받습니�
   - 전역 훅 설치: `python3 vibekit_seed_install.py install-global-hook`
   - 프로젝트 루트에 `.vibekit.auto` 파일 생성 후 첫 checkout 시 자동 bootstrap
   - 기본 동작: seed 설치 + setup/configure/doctor/hooks + `.github/workflows/vibekit-guard.yml` 작성
+  - 추가 동작(기본 활성): Codex 전역 지시문(`~/.codex/AGENTS.md` 또는 `~/.codex/AGENTS.override.md`)에
+    "vibe-kit 미설치 repo에서 yes/no 설치 질문" 규칙 자동 반영
+    - 끄기: `python3 vibekit_seed_install.py install-global-hook --no-install-codex-prompt`
+    - 억제 마커 파일명 변경: `--suppress-file .vibekit.ignore`
 
 설치 결과(요약):
 - target repo에 `.vibe/` + `scripts/vibe.py` 등이 **파일로만 설치**됩니다.
@@ -164,6 +168,7 @@ Consumers can verify downloaded assets with GitHub CLI:
    - Install global opt-in hook for future repos:
      - `python3 vibekit_seed_install.py install-global-hook`
      - Add `.vibekit.auto` at repo root to enable auto-bootstrap on first checkout.
+     - Default: also installs global Codex prompt for missing vibe-kit repos (disable with `--no-install-codex-prompt`).
 
 5) After install (in the target repo), run:
    - (recommended once) `python3 scripts/vibe.py configure --apply`
