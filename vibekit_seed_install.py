@@ -170,6 +170,7 @@ def _write_agent_instructions(root: Path, agent: str, *, force: bool, apply: boo
             "# Copilot Instructions\n\n"
             "- Use `.vibe/context/LATEST_CONTEXT.md` for repo context.\n"
             "- (Once) Run: `python3 scripts/vibe.py configure --apply`\n"
+            "- Run: `python3 scripts/vibe.py doctor --full`\n"
             "- Prefer small, localized changes.\n",
         ),
         "cursor": (

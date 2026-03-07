@@ -186,6 +186,8 @@ class TestInstaller(unittest.TestCase):
             self.assertTrue((root / "GEMINI.md").exists())
             self.assertTrue((root / ".github" / "copilot-instructions.md").exists())
             self.assertTrue((root / ".cursor" / "rules" / "vibekit.md").exists())
+            copilot = (root / ".github" / "copilot-instructions.md").read_text(encoding="utf-8")
+            self.assertIn("python3 scripts/vibe.py doctor --full", copilot)
 
 
 class TestBootstrapHelpers(unittest.TestCase):
