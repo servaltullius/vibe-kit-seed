@@ -3,10 +3,19 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import time
 from pathlib import Path
 from typing import Any
+
+from repo_detect import (
+    detect_package_manager as _shared_detect_package_manager,
+    detect_pyright,
+    has_gradle_files,
+    pick_dotnet_target,
+    read_text_best_effort,
+    repo_has_any_named_file,
+    repo_has_any_suffix,
+)
 
 
 def _repo_root() -> Path:
@@ -75,106 +84,15 @@ def _set_dotted(
     changes.append({"path": dotted, "before": before, "after": value, "forced": bool(force and overwrote)})
 
 
-def _walk_repo_files(root: Path, exclude_dirs: set[str]) -> Any:
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d.lower() not in exclude_dirs]
-        for name in filenames:
-            yield Path(dirpath) / name
-
-
-def _repo_has_any_suffix(root: Path, exclude_dirs: set[str], suffixes: set[str]) -> bool:
-    for p in _walk_repo_files(root, exclude_dirs):
-        if p.suffix.lower() in suffixes:
-            return True
-    return False
-
-
-def _repo_has_any_named_file(root: Path, exclude_dirs: set[str], names: set[str]) -> bool:
-    names_l = {n.lower() for n in names}
-    for p in _walk_repo_files(root, exclude_dirs):
-        if p.name.lower() in names_l:
-            return True
-    return False
-
-
-def _read_text_best_effort(path: Path) -> str:
-    try:
-        return path.read_text(encoding="utf-8", errors="ignore")
-    except OSError:
-        return ""
-
-
-def _collect_dotnet_targets(root: Path, exclude_dirs: set[str]) -> tuple[list[Path], list[Path]]:
-    slns: list[Path] = []
-    projects: list[Path] = []
-    for p in _walk_repo_files(root, exclude_dirs):
-        suf = p.suffix.lower()
-        if suf == ".sln":
-            slns.append(p)
-        elif suf in {".csproj", ".fsproj", ".vbproj"}:
-            projects.append(p)
-    slns.sort(key=lambda p: p.as_posix())
-    projects.sort(key=lambda p: p.as_posix())
-    return slns, projects
-
-
 def _pick_dotnet_target(root: Path, exclude_dirs: set[str]) -> str | None:
-    slns, projects = _collect_dotnet_targets(root, exclude_dirs)
-    if slns:
-        root_slns = [p for p in slns if p.parent == root]
-        pick = root_slns[0] if root_slns else slns[0]
-        return pick.relative_to(root).as_posix()
-
-    if not projects:
+    pick = pick_dotnet_target(root, exclude_dirs, prefer_solution=True)
+    if pick is None:
         return None
-
-    def score(p: Path) -> int:
-        s = 0
-        name = p.name.lower()
-        path = p.as_posix().lower()
-        if "core" in name:
-            s += 50
-        if "lib" in name or "library" in name:
-            s += 30
-        if "/tests/" in path or ".tests" in name:
-            s -= 100
-        if "test" in name:
-            s -= 80
-        if "/src/" in path:
-            s += 10
-        return s
-
-    pick = sorted(projects, key=lambda p: (-score(p), p.as_posix()))[0]
     return pick.relative_to(root).as_posix()
 
 
-def _detect_pyright(root: Path) -> bool:
-    if (root / "pyrightconfig.json").exists():
-        return True
-    pyproject = root / "pyproject.toml"
-    if pyproject.exists():
-        return "[tool.pyright]" in _read_text_best_effort(pyproject)
-    return False
-
-
 def _detect_package_manager(root: Path, package_json: dict[str, Any]) -> tuple[str, str]:
-    raw_pm = package_json.get("packageManager")
-    if isinstance(raw_pm, str) and raw_pm.strip():
-        name = raw_pm.strip().split("@", 1)[0].strip().lower()
-        if name in {"npm", "pnpm", "yarn", "bun"}:
-            return name, "packageManager field"
-
-    # Fall back to lockfiles.
-    if (root / "bun.lock").exists() or (root / "bun.lockb").exists():
-        return "bun", "lockfile"
-    if (root / "pnpm-lock.yaml").exists():
-        return "pnpm", "lockfile"
-    if (root / "yarn.lock").exists():
-        return "yarn", "lockfile"
-    if (root / "package-lock.json").exists():
-        return "npm", "lockfile"
-
-    return "npm", "default"
+    return _shared_detect_package_manager(root, package_json)
 
 
 def _pick_typecheck_recommendation(
@@ -204,46 +122,40 @@ def _pick_typecheck_recommendation(
         meta["node_pm"] = pm
         meta["node_has_typecheck_script"] = bool(has_typecheck_script)
         if has_typecheck_script:
-            ts_present = (root / "tsconfig.json").exists() or _repo_has_any_suffix(root, exclude_dirs, {".ts", ".tsx"})
+            ts_present = (root / "tsconfig.json").exists() or repo_has_any_suffix(root, exclude_dirs, {".ts", ".tsx"})
             meta["ts_present"] = bool(ts_present)
             when = ["**/*.ts", "**/*.tsx"] if ts_present else ["**/*.js", "**/*.jsx"]
             return [pm, "run", "typecheck"], when, meta
 
     mypy_present = (root / "mypy.ini").exists()
     if not mypy_present and (root / "pyproject.toml").exists():
-        pyproj = _read_text_best_effort(root / "pyproject.toml")
+        pyproj = read_text_best_effort(root / "pyproject.toml")
         mypy_present = "[tool.mypy]" in pyproj
     meta["mypy_present"] = bool(mypy_present)
     if mypy_present:
         return ["mypy", "."], ["**/*.py"], meta
 
-    pyright_present = _detect_pyright(root)
+    pyright_present = detect_pyright(root)
     meta["pyright_present"] = bool(pyright_present)
     if pyright_present:
         return ["pyright"], ["**/*.py", "pyproject.toml", "pyrightconfig.json"], meta
 
-    go_present = (root / "go.mod").exists() or _repo_has_any_named_file(root, exclude_dirs, {"go.mod"})
+    go_present = (root / "go.mod").exists() or repo_has_any_named_file(root, exclude_dirs, {"go.mod"})
     meta["go_present"] = bool(go_present)
     if go_present:
         return ["go", "test", "./...", "-run=^$"], ["**/*.go", "go.mod", "go.sum"], meta
 
-    rust_present = (root / "Cargo.toml").exists() or _repo_has_any_named_file(root, exclude_dirs, {"Cargo.toml"})
+    rust_present = (root / "Cargo.toml").exists() or repo_has_any_named_file(root, exclude_dirs, {"Cargo.toml"})
     meta["rust_present"] = bool(rust_present)
     if rust_present:
         return ["cargo", "check"], ["**/*.rs", "Cargo.toml", "Cargo.lock"], meta
 
-    maven_present = (root / "pom.xml").exists() or _repo_has_any_named_file(root, exclude_dirs, {"pom.xml"})
+    maven_present = (root / "pom.xml").exists() or repo_has_any_named_file(root, exclude_dirs, {"pom.xml"})
     meta["maven_present"] = bool(maven_present)
     if maven_present:
         return ["mvn", "-q", "-DskipTests", "compile"], ["pom.xml", "**/*.java", "**/*.kt"], meta
 
-    gradle_present = any((root / p).exists() for p in ("gradlew", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"))
-    if not gradle_present:
-        gradle_present = _repo_has_any_named_file(
-            root,
-            exclude_dirs,
-            {"gradlew", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"},
-        )
+    gradle_present = has_gradle_files(root, exclude_dirs)
     meta["gradle_present"] = bool(gradle_present)
     if gradle_present:
         has_wrapper = (root / "gradlew").exists()

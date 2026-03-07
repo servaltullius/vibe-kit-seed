@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import shlex
 import shutil
@@ -12,7 +11,8 @@ import sys
 import time
 from pathlib import Path
 
-from context_db import is_excluded, load_config
+from context_db import load_config
+from repo_detect import pick_dotnet_target
 
 
 DOTNET_DIAG_RE = re.compile(
@@ -32,55 +32,9 @@ MYPY_DIAG_RE = re.compile(
 )
 
 
-def _iter_dotnet_projects(cfg) -> tuple[list[Path], list[Path]]:
-    root = cfg.root
-    slns: list[Path] = []
-    csprojs: list[Path] = []
-    for p in root.rglob("*.sln"):
-        rel = p.relative_to(root)
-        if is_excluded(rel, cfg.exclude_dirs):
-            continue
-        slns.append(p)
-    for p in root.rglob("*.csproj"):
-        rel = p.relative_to(root)
-        if is_excluded(rel, cfg.exclude_dirs):
-            continue
-        csprojs.append(p)
-    slns.sort(key=lambda x: x.as_posix())
-    csprojs.sort(key=lambda x: x.as_posix())
-    return slns, csprojs
-
-
 def _pick_dotnet_build_target(cfg) -> Path | None:
-    slns, csprojs = _iter_dotnet_projects(cfg)
     prefer_solution = bool(cfg.quality_gates.get("typecheck_prefer_solution", False))
-    if prefer_solution and slns:
-        # Prefer root-level solution, else take the first one.
-        root_slns = [p for p in slns if p.parent == cfg.root]
-        return root_slns[0] if root_slns else slns[0]
-
-    if not csprojs:
-        return None
-
-    def score(p: Path) -> int:
-        s = 0
-        name = p.name.lower()
-        path = p.as_posix().lower()
-        if "core" in name:
-            s += 50
-        if "lib" in name or "library" in name:
-            s += 30
-        if "/tests/" in path or name.endswith(".tests.csproj") or ".tests" in name:
-            s -= 100
-        if "test" in name:
-            s -= 80
-        if "app" in name or "ui" in name or "wpf" in name:
-            s -= 30
-        if "/src/" in path:
-            s += 10
-        return s
-
-    return sorted(csprojs, key=lambda p: (-score(p), p.as_posix()))[0]
+    return pick_dotnet_target(cfg.root, cfg.exclude_dirs, prefer_solution=prefer_solution)
 
 
 def _default_cmd(cfg) -> list[str] | None:

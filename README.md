@@ -61,6 +61,7 @@ GitHub Releases의 같은 릴리즈에서 아래 3개 파일을 내려받습니�
 - 진단/요약 생성: `python3 scripts/vibe.py doctor --full`
   - 출력: `.vibe/context/LATEST_CONTEXT.md`, `.vibe/reports/*` (gitignore 권장)
 - 변경 감시(선택): `python3 scripts/vibe.py watch`
+  - `.vibe/config.json`의 `include_globs` 기준으로 파일 변경을 감시하며, watchdog이 없으면 polling으로 신규/삭제 파일까지 반영
 - 컨텍스트 DB 검색: `python3 scripts/vibe.py search "<query>"`
 - 영향도(간단) 분석: `python3 scripts/vibe.py impact <path>`
 - (설계/경계 점검) 아키텍처 경계 위반 체크: `python3 scripts/vibe.py boundaries` (config-driven)
@@ -118,7 +119,9 @@ What vibe-kit does (in the *target* repo after install):
   - `python3 scripts/vibe.py boundaries --init-template`: write starter `architecture.rules` template into `.vibe/config.json` (safe/idempotent)
   - `python3 scripts/vibe.py boundaries --strict`: return non-zero on any violation, even with `--best-effort`
 - `python3 scripts/vibe.py coupling`: change coupling report (files that tend to change together; useful for refactoring/decoupling)
-- `python3 scripts/vibe.py watch`: keep context refreshed while you work (watchdog if installed; otherwise polling)
+- `python3 scripts/vibe.py watch`: keep context refreshed while you work
+  - tracks files using `.vibe/config.json` `include_globs`
+  - uses watchdog when installed, otherwise polling with create/delete detection
 - `python3 scripts/vibe.py hooks --install`: optional git hook installer
 - Customize per-repo settings in `.vibe/config.json` (`exclude_dirs`, `include_globs`, `quality_gates`, `checks`, etc.)
 

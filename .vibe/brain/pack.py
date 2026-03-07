@@ -11,6 +11,7 @@ from pathlib import Path
 
 import indexer as vibe_indexer
 from context_db import connect, is_excluded, load_config, normalize_rel
+from repo_detect import detect_package_manager, has_gradle_files, has_pytest_config
 
 
 def _git_available(root: Path) -> bool:
@@ -168,26 +169,14 @@ def _has_any_glob(root: Path, patterns: list[str]) -> bool:
 
 def _detect_node_package_manager(root: Path) -> str:
     package_json = root / "package.json"
+    data: dict | None = None
     if package_json.exists():
         try:
             data = json.loads(package_json.read_text(encoding="utf-8"))
         except Exception:
-            data = {}
-        raw = data.get("packageManager")
-        if isinstance(raw, str) and raw.strip():
-            name = raw.strip().split("@", 1)[0].strip().lower()
-            if name in {"npm", "pnpm", "yarn", "bun"}:
-                return name
-
-    if (root / "bun.lock").exists() or (root / "bun.lockb").exists():
-        return "bun"
-    if (root / "pnpm-lock.yaml").exists():
-        return "pnpm"
-    if (root / "yarn.lock").exists():
-        return "yarn"
-    if (root / "package-lock.json").exists():
-        return "npm"
-    return "npm"
+            data = None
+    pm, _source = detect_package_manager(root, data)
+    return pm
 
 
 def _default_test_command(root: Path) -> str:
@@ -208,22 +197,10 @@ def _default_test_command(root: Path) -> str:
         return "npm test"
     if (root / "pom.xml").exists():
         return "mvn test"
-    if any(
-        (root / p).exists()
-        for p in ("gradlew", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts")
-    ):
+    if has_gradle_files(root, exclude_dirs=[]):
         return "./gradlew test" if (root / "gradlew").exists() else "gradle test"
-    if (root / "pytest.ini").exists():
+    if has_pytest_config(root):
         return "pytest -q"
-
-    pyproject = root / "pyproject.toml"
-    if pyproject.exists():
-        try:
-            text = pyproject.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
-            text = ""
-        if "[tool.pytest" in text:
-            return "pytest -q"
 
     return "python3 -m unittest discover -s tests -p 'test*.py' -v"
 

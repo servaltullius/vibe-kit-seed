@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import subprocess
 import sys
 import threading
@@ -21,10 +22,20 @@ def _run(py: Path, args: list[str]) -> int:
     return p.returncode
 
 
+def _matches_include(rel_posix: str, include_globs: list[str]) -> bool:
+    if not include_globs:
+        return True
+    for pattern in include_globs:
+        if fnmatch.fnmatch(rel_posix, pattern):
+            return True
+        if pattern.startswith("**/") and fnmatch.fnmatch(rel_posix, pattern[3:]):
+            return True
+    return False
+
+
 def _should_track(path: Path, cfg) -> bool:
     if any(str(path).endswith(s) for s in IGNORE_SUFFIXES):
         return False
-    rel = None
     try:
         rel = path.relative_to(cfg.root)
     except ValueError:
@@ -32,8 +43,7 @@ def _should_track(path: Path, cfg) -> bool:
     parts = {p.lower() for p in rel.parts}
     if any(ex.lower() in parts for ex in cfg.exclude_dirs):
         return False
-    suf = path.suffix.lower()
-    return suf in {".cs", ".xaml", ".csproj", ".sln", ".md"}
+    return _matches_include(rel.as_posix(), cfg.include_globs)
 
 
 @dataclass
@@ -41,28 +51,92 @@ class Pending:
     last_ts: float
 
 
-def _loop(cfg, pending: dict[Path, Pending], lock: threading.Lock, debounce_s: float) -> None:
+@dataclass
+class WatchState:
+    pending_files: dict[Path, Pending]
+    full_rescan_ts: float | None = None
+
+
+def _mark_pending_file(state: WatchState, lock: threading.Lock, path: Path, now: float) -> None:
+    with lock:
+        state.pending_files[path] = Pending(last_ts=now)
+
+
+def _mark_full_rescan(state: WatchState, lock: threading.Lock, now: float) -> None:
+    with lock:
+        if state.full_rescan_ts is None or now > state.full_rescan_ts:
+            state.full_rescan_ts = now
+
+
+def _collect_tracked_files(cfg) -> dict[Path, float]:
+    tracked: dict[Path, float] = {}
+    for path in cfg.root.rglob("*"):
+        if not path.is_file() or not _should_track(path, cfg):
+            continue
+        try:
+            tracked[path] = path.stat().st_mtime
+        except OSError:
+            continue
+    return tracked
+
+
+def _diff_tracked_files(previous: dict[Path, float], current: dict[Path, float]) -> tuple[list[Path], bool]:
+    changed: list[Path] = []
+    for path, mtime in current.items():
+        if previous.get(path) != mtime:
+            changed.append(path)
+    has_deleted = any(path not in current for path in previous)
+    changed.sort()
+    return changed, has_deleted
+
+
+def _reconcile_tracked_files(cfg, tracked: dict[Path, float]) -> tuple[dict[Path, float], list[Path], bool]:
+    current = _collect_tracked_files(cfg)
+    changed, has_deleted = _diff_tracked_files(tracked, current)
+    return current, changed, has_deleted
+
+
+def _loop(cfg, state: WatchState, lock: threading.Lock, debounce_s: float) -> None:
     brain = cfg.root / ".vibe" / "brain"
     while True:
         time.sleep(0.2)
         now = time.time()
         ready: list[Path] = []
+        run_full_rescan = False
         with lock:
-            for p, meta in list(pending.items()):
-                if now - meta.last_ts >= debounce_s:
-                    ready.append(p)
-                    pending.pop(p, None)
+            if state.full_rescan_ts is not None and now - state.full_rescan_ts >= debounce_s:
+                run_full_rescan = True
+                state.full_rescan_ts = None
+                state.pending_files.clear()
+            else:
+                for p, meta in list(state.pending_files.items()):
+                    if now - meta.last_ts >= debounce_s:
+                        ready.append(p)
+                        state.pending_files.pop(p, None)
+
+        if run_full_rescan:
+            rc = _run(brain / "indexer.py", ["--scan-all"])
+            if rc != 0:
+                time.sleep(0.3)
+                _run(brain / "indexer.py", ["--scan-all"])
+            _run(brain / "summarizer.py", ["--full"])
+            continue
 
         if not ready:
             continue
 
         for p in ready:
+            if not p.exists():
+                _mark_full_rescan(state, lock, time.time())
+                continue
             rel = p.relative_to(cfg.root).as_posix()
             rc = _run(brain / "indexer.py", ["--file", rel])
             if rc != 0:
                 # one retry (sqlite lock etc)
                 time.sleep(0.3)
-                _run(brain / "indexer.py", ["--file", rel])
+                retry_rc = _run(brain / "indexer.py", ["--file", rel])
+                if retry_rc != 0:
+                    _mark_full_rescan(state, lock, time.time())
 
         _run(brain / "summarizer.py", [])
 
@@ -82,7 +156,7 @@ def _watch_with_watchdog(cfg, debounce_s: float) -> int:
         )
         return 1
 
-    pending: dict[Path, Pending] = {}
+    state = WatchState(pending_files={})
     lock = threading.Lock()
 
     class Handler(FileSystemEventHandler):
@@ -92,26 +166,33 @@ def _watch_with_watchdog(cfg, debounce_s: float) -> int:
             p = Path(event.src_path)
             if not _should_track(p, cfg):
                 return
-            with lock:
-                pending[p] = Pending(last_ts=time.time())
+            _mark_pending_file(state, lock, p, time.time())
 
         def on_created(self, event):  # noqa: N802
             self.on_modified(event)
 
+        def on_deleted(self, event):  # noqa: N802
+            if event.is_directory:
+                return
+            p = Path(event.src_path)
+            if not _should_track(p, cfg):
+                return
+            _mark_full_rescan(state, lock, time.time())
+
         def on_moved(self, event):  # noqa: N802
             if event.is_directory:
                 return
-            p = Path(getattr(event, "dest_path", event.src_path))
-            if not _should_track(p, cfg):
+            src = Path(event.src_path)
+            dest = Path(getattr(event, "dest_path", event.src_path))
+            if not _should_track(src, cfg) and not _should_track(dest, cfg):
                 return
-            with lock:
-                pending[p] = Pending(last_ts=time.time())
+            _mark_full_rescan(state, lock, time.time())
 
     observer = Observer()
     handler = Handler()
     observer.schedule(handler, str(cfg.root), recursive=True)
 
-    thread = threading.Thread(target=_loop, args=(cfg, pending, lock, debounce_s), daemon=True)
+    thread = threading.Thread(target=_loop, args=(cfg, state, lock, debounce_s), daemon=True)
     thread.start()
 
     observer.start()
@@ -128,29 +209,22 @@ def _watch_with_watchdog(cfg, debounce_s: float) -> int:
 
 def _watch_with_polling(cfg, debounce_s: float) -> int:
     # Fallback when watchdog isn't installed: poll mtimes.
-    tracked: dict[Path, float] = {}
-    for p in cfg.root.rglob("*"):
-        if p.is_file() and _should_track(p, cfg):
-            tracked[p] = p.stat().st_mtime
-
-    pending: dict[Path, Pending] = {}
+    tracked = _collect_tracked_files(cfg)
+    state = WatchState(pending_files={})
     lock = threading.Lock()
-    thread = threading.Thread(target=_loop, args=(cfg, pending, lock, debounce_s), daemon=True)
+    thread = threading.Thread(target=_loop, args=(cfg, state, lock, debounce_s), daemon=True)
     thread.start()
 
     print(f"[watcher] watchdog not available; polling every 1s (debounce={debounce_s:.2f}s)")
     try:
         while True:
             time.sleep(1.0)
-            for p, last in list(tracked.items()):
-                try:
-                    cur = p.stat().st_mtime
-                except OSError:
-                    continue
-                if cur != last:
-                    tracked[p] = cur
-                    with lock:
-                        pending[p] = Pending(last_ts=time.time())
+            tracked, changed, has_deleted = _reconcile_tracked_files(cfg, tracked)
+            now = time.time()
+            for path in changed:
+                _mark_pending_file(state, lock, path, now)
+            if has_deleted:
+                _mark_full_rescan(state, lock, now)
     except KeyboardInterrupt:
         print("[watcher] stopping...")
         return 0
