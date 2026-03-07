@@ -104,6 +104,7 @@ Think of this as a distribution/publisher repo:
 
 What vibe-kit does (in the *target* repo after install):
 - Builds a local index of the repo (SQLite) and writes summaries under `.vibe/context/`
+- Extracts best-effort symbols for common languages including C#, Python, and TS/TSX to improve search and packs
 - Produces lightweight context packs for LLMs (e.g. `.vibe/context/LATEST_CONTEXT.md`)
 - Writes reports under `.vibe/reports/` (gitignored)
 

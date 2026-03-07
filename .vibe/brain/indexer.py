@@ -3,15 +3,15 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
 import time
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 from context_db import VibeConfig, connect, is_excluded, load_config, normalize_rel, sha1_text
+from symbol_extract_py import extract_symbols_py
+from symbol_extract_ts import extract_symbols_ts
+from symbol_types import Symbol
 
 
 TYPE_RE = re.compile(
@@ -38,21 +38,6 @@ NAMESPACE_RE = re.compile(r"^\s*namespace\s+(?P<ns>[A-Za-z_][A-Za-z0-9_\.]*)\s*;
 
 XMLDOC_LINE_RE = re.compile(r"^\s*///\s?(?P<text>.*)$")
 ATTR_LINE_RE = re.compile(r"^\s*\[(?P<attr>[^\]]+)\]\s*$")
-
-
-@dataclass
-class Symbol:
-    name: str
-    file: str
-    line: int
-    kind: str
-    signature: str | None
-    access: str | None
-    doc: str | None
-    tags: list[str]
-    attrs: list[str]
-    exported: int
-
 
 def _iter_files(cfg: VibeConfig) -> list[Path]:
     root = cfg.root
@@ -277,8 +262,13 @@ def index_file(path: Path, cfg: VibeConfig, con=None) -> bool:
         con.execute("DELETE FROM fts_files WHERE path = ?", (rel_s,))
 
         symbols: list[Symbol] = []
-        if path.suffix.lower() == ".cs":
+        suffix = path.suffix.lower()
+        if suffix == ".cs":
             symbols = _extract_symbols_cs(text, rel_s, cfg)
+        elif suffix == ".py":
+            symbols = extract_symbols_py(text, rel_s, cfg.critical_tags)
+        elif suffix in {".ts", ".tsx", ".js", ".jsx"}:
+            symbols = extract_symbols_ts(text, rel_s, cfg.critical_tags)
 
         for sym in symbols:
             con.execute(
@@ -366,7 +356,7 @@ def _purge_stale_files(con, paths: list[str]) -> None:
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description="vibe-kit indexer (C# + docs).")
+    parser = argparse.ArgumentParser(description="vibe-kit indexer (C#, Python, TS/JS + docs).")
     g = parser.add_mutually_exclusive_group(required=True)
     g.add_argument("--scan-all", action="store_true", help="Index all configured files.")
     g.add_argument("--file", help="Index a single file (repo-relative or absolute).")
