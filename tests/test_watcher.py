@@ -50,6 +50,17 @@ class TestWatcherShouldTrack(unittest.TestCase):
 
             self.assertFalse(watcher._should_track(ignored, cfg))
 
+    def test_should_track_matches_indexer_glob_semantics_for_single_star(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            nested = root / "src" / "nested" / "file.ts"
+            nested.parent.mkdir(parents=True, exist_ok=True)
+            nested.write_text("export const x = 1;\n", encoding="utf-8")
+
+            cfg = _DummyCfg(root=root, include_globs=["src/*.ts"])
+
+            self.assertFalse(watcher._should_track(nested, cfg))
+
 
 class TestWatcherPollingDiff(unittest.TestCase):
     def test_diff_tracked_files_reports_changed_and_deleted(self) -> None:

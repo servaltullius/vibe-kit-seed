@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import fnmatch
 import subprocess
 import sys
 import threading
@@ -11,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from context_db import load_config
+from path_globs import matches_include_globs
 
 
 IGNORE_SUFFIXES = (".swp", ".tmp", ".bak", ".pyc", "~")
@@ -20,17 +20,6 @@ def _run(py: Path, args: list[str]) -> int:
     cmd = [sys.executable, str(py), *args]
     p = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return p.returncode
-
-
-def _matches_include(rel_posix: str, include_globs: list[str]) -> bool:
-    if not include_globs:
-        return True
-    for pattern in include_globs:
-        if fnmatch.fnmatch(rel_posix, pattern):
-            return True
-        if pattern.startswith("**/") and fnmatch.fnmatch(rel_posix, pattern[3:]):
-            return True
-    return False
 
 
 def _should_track(path: Path, cfg) -> bool:
@@ -43,7 +32,7 @@ def _should_track(path: Path, cfg) -> bool:
     parts = {p.lower() for p in rel.parts}
     if any(ex.lower() in parts for ex in cfg.exclude_dirs):
         return False
-    return _matches_include(rel.as_posix(), cfg.include_globs)
+    return matches_include_globs(rel.as_posix(), cfg.include_globs)
 
 
 @dataclass

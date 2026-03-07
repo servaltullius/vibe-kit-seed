@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import fnmatch
 import json
 import subprocess
 import sys
@@ -11,6 +10,7 @@ from pathlib import Path
 
 import indexer as vibe_indexer
 from context_db import connect, is_excluded, load_config, normalize_rel
+from path_globs import matches_include_globs
 from repo_detect import detect_package_manager, has_gradle_files, has_pytest_config
 
 
@@ -39,18 +39,6 @@ def _files_changed(root: Path) -> list[str]:
     return sorted(set([*changed, *untracked]))
 
 
-def _matches_include(rel_posix: str, include_globs: list[str]) -> bool:
-    if not include_globs:
-        return True
-    for g in include_globs:
-        if fnmatch.fnmatch(rel_posix, g):
-            return True
-        # Treat "**/" prefix as optional so patterns like "**/*.md" match root files too.
-        if g.startswith("**/") and fnmatch.fnmatch(rel_posix, g[3:]):
-            return True
-    return False
-
-
 def _files_from_path(root: Path, cfg, scope_path: str) -> list[str]:
     p = Path(scope_path)
     if not p.is_absolute():
@@ -66,7 +54,7 @@ def _files_from_path(root: Path, cfg, scope_path: str) -> list[str]:
         rel = normalize_rel(rel_root)
         if is_excluded(Path(rel), cfg.exclude_dirs):
             return []
-        if not _matches_include(rel, cfg.include_globs):
+        if not matches_include_globs(rel, cfg.include_globs):
             return []
         return [rel]
 
@@ -84,7 +72,7 @@ def _files_from_path(root: Path, cfg, scope_path: str) -> list[str]:
         if is_excluded(rel, cfg.exclude_dirs):
             continue
         rel_s = normalize_rel(rel)
-        if _matches_include(rel_s, cfg.include_globs):
+        if matches_include_globs(rel_s, cfg.include_globs):
             files.append(rel_s)
     return sorted(set(files))
 
@@ -103,7 +91,7 @@ def _filter_repo_files(root: Path, cfg, rel_paths: list[str]) -> list[str]:
         if is_excluded(rel, cfg.exclude_dirs):
             continue
         rel_s = normalize_rel(rel)
-        if not _matches_include(rel_s, cfg.include_globs):
+        if not matches_include_globs(rel_s, cfg.include_globs):
             continue
         if not (root / rel).exists():
             continue

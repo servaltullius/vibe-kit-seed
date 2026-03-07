@@ -130,6 +130,36 @@ class TestIndexerTypeScriptSymbols(unittest.TestCase):
             finally:
                 con.close()
 
+    def test_skips_nested_typescript_declarations_inside_functions(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "src" / "nested.ts"
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_text(
+                'export function outer() {\n'
+                '  const localThing = 1;\n'
+                '  function nested() {\n'
+                '    return localThing;\n'
+                '  }\n'
+                '  return nested();\n'
+                '}\n',
+                encoding="utf-8",
+            )
+
+            cfg = _cfg(root)
+            con = _memory_db()
+            try:
+                changed = indexer.index_file(source, cfg, con=con)
+                self.assertTrue(changed)
+
+                rows = con.execute("SELECT name FROM symbols ORDER BY line").fetchall()
+                names = [row["name"] for row in rows]
+                self.assertIn("outer", names)
+                self.assertNotIn("nested", names)
+                self.assertNotIn("localThing", names)
+            finally:
+                con.close()
+
 
 if __name__ == "__main__":
     unittest.main()

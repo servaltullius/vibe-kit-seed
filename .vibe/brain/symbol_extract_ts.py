@@ -83,8 +83,66 @@ def _signature(kind: str, name: str, rest: str, is_async: bool) -> str:
     return f"{kind} {name}".strip()
 
 
+def _line_depths(text: str) -> list[int]:
+    depths: list[int] = []
+    depth = 0
+    in_block_comment = False
+    in_string: str | None = None
+    escape = False
+
+    for line in text.splitlines():
+        depths.append(depth)
+        i = 0
+        while i < len(line):
+            ch = line[i]
+            nxt = line[i + 1] if i + 1 < len(line) else ""
+
+            if in_block_comment:
+                if ch == "*" and nxt == "/":
+                    in_block_comment = False
+                    i += 2
+                    continue
+                i += 1
+                continue
+
+            if in_string is not None:
+                if escape:
+                    escape = False
+                    i += 1
+                    continue
+                if ch == "\\":
+                    escape = True
+                    i += 1
+                    continue
+                if ch == in_string:
+                    in_string = None
+                i += 1
+                continue
+
+            if ch == "/" and nxt == "/":
+                break
+            if ch == "/" and nxt == "*":
+                in_block_comment = True
+                i += 2
+                continue
+            if ch in {"'", '"', "`"}:
+                in_string = ch
+                i += 1
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth = max(0, depth - 1)
+            i += 1
+
+        escape = False
+
+    return depths
+
+
 def extract_symbols_ts(text: str, rel_file: str, critical_tags: list[str]) -> list[Symbol]:
     lines = text.splitlines()
+    depths = _line_depths(text)
     symbols: list[Symbol] = []
     seen: set[tuple[str, int]] = set()
 
@@ -93,6 +151,8 @@ def extract_symbols_ts(text: str, rel_file: str, critical_tags: list[str]) -> li
         name = match.group("name")
         rest = match.group("rest") or ""
         line = _line_number(text, match.start())
+        if line - 1 < len(depths) and depths[line - 1] != 0:
+            continue
         exported = 1 if match.group("export") else 0
         access = "public" if exported else "private"
         if kind in {"let", "var"} and "=>" not in rest and "function" not in rest:
