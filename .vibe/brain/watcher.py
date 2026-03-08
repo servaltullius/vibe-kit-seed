@@ -70,19 +70,39 @@ def _collect_tracked_files(cfg) -> dict[Path, float]:
 
 
 def _diff_tracked_files(previous: dict[Path, float], current: dict[Path, float]) -> tuple[list[Path], bool]:
-    changed: list[Path] = []
+    modified: list[Path] = []
+    created: list[Path] = []
     for path, mtime in current.items():
-        if previous.get(path) != mtime:
-            changed.append(path)
+        if path not in previous:
+            created.append(path)
+        elif previous[path] != mtime:
+            modified.append(path)
     has_deleted = any(path not in current for path in previous)
-    changed.sort()
-    return changed, has_deleted
+    modified.sort()
+    created.sort()
+    return modified + created, has_deleted
 
 
-def _reconcile_tracked_files(cfg, tracked: dict[Path, float]) -> tuple[dict[Path, float], list[Path], bool]:
+def _classify_tracked_files(
+    previous: dict[Path, float], current: dict[Path, float]
+) -> tuple[list[Path], list[Path], bool]:
+    modified: list[Path] = []
+    created: list[Path] = []
+    for path, mtime in current.items():
+        if path not in previous:
+            created.append(path)
+        elif previous[path] != mtime:
+            modified.append(path)
+    has_deleted = any(path not in current for path in previous)
+    modified.sort()
+    created.sort()
+    return modified, created, has_deleted
+
+
+def _reconcile_tracked_files(cfg, tracked: dict[Path, float]) -> tuple[dict[Path, float], list[Path], list[Path], bool]:
     current = _collect_tracked_files(cfg)
-    changed, has_deleted = _diff_tracked_files(tracked, current)
-    return current, changed, has_deleted
+    modified, created, has_deleted = _classify_tracked_files(tracked, current)
+    return current, modified, created, has_deleted
 
 
 def _loop(cfg, state: WatchState, lock: threading.Lock, debounce_s: float) -> None:
@@ -158,7 +178,12 @@ def _watch_with_watchdog(cfg, debounce_s: float) -> int:
             _mark_pending_file(state, lock, p, time.time())
 
         def on_created(self, event):  # noqa: N802
-            self.on_modified(event)
+            if event.is_directory:
+                return
+            p = Path(event.src_path)
+            if not _should_track(p, cfg):
+                return
+            _mark_full_rescan(state, lock, time.time())
 
         def on_deleted(self, event):  # noqa: N802
             if event.is_directory:
@@ -208,11 +233,11 @@ def _watch_with_polling(cfg, debounce_s: float) -> int:
     try:
         while True:
             time.sleep(1.0)
-            tracked, changed, has_deleted = _reconcile_tracked_files(cfg, tracked)
+            tracked, modified, created, has_deleted = _reconcile_tracked_files(cfg, tracked)
             now = time.time()
-            for path in changed:
+            for path in modified:
                 _mark_pending_file(state, lock, path, now)
-            if has_deleted:
+            if created or has_deleted:
                 _mark_full_rescan(state, lock, now)
     except KeyboardInterrupt:
         print("[watcher] stopping...")

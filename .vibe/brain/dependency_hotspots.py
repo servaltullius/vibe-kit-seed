@@ -8,16 +8,16 @@ from context_db import connect, load_config
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description="Hotspot summaries (fan-in + large files).")
+    parser = argparse.ArgumentParser(description="Hotspot summaries (dependency fan-in + large files).")
     parser.add_argument("--out", default=".vibe/reports/hotspots.json")
     args = parser.parse_args(argv)
 
     cfg = load_config()
     con = connect()
     try:
-        # ProjectReference fan-in
+        # Best-effort fan-in across indexed dependency kinds.
         fan_in = con.execute(
-            "SELECT to_file AS target, COUNT(*) AS n FROM deps WHERE kind='ProjectReference' GROUP BY to_file ORDER BY n DESC LIMIT 20"
+            "SELECT to_file AS target, COUNT(*) AS n FROM deps GROUP BY to_file ORDER BY n DESC LIMIT 20"
         ).fetchall()
         fan_in = [{"target": r["target"], "count": int(r["n"])} for r in fan_in]
 
@@ -40,7 +40,7 @@ def main(argv: list[str]) -> int:
 
     print("Hotspots:")
     if fan_in:
-        print("- Project fan-in (top 5):")
+        print("- Dependency fan-in (top 5):")
         for r in fan_in[:5]:
             print(f"  - {r['target']}: {r['count']}")
     if largest:
@@ -57,4 +57,3 @@ def main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(__import__("sys").argv[1:]))
-

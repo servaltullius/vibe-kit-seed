@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import importlib.util
 import io
 import os
 import re
@@ -13,6 +14,9 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from zipfile import ZipFile
@@ -30,6 +34,7 @@ ALLOWED_EXACT: set[str] = {
     "scripts/vibekit.py",
     "scripts/vibekit.cmd",
     "scripts/setup_vibe_env.py",
+    "scripts/agent_templates.py",
     "scripts/install_hooks.py",
     ".vibe/README.md",
     ".vibe/AGENT_CHECKLIST.md",
@@ -43,6 +48,11 @@ DEFAULT_CODEX_HOME = Path("~/.codex").expanduser()
 CODEX_PROMPT_HEADER = "## Vibe-kit Auto-Prompt (Missing in Repo)"
 CODEX_PROMPT_START = "<!-- vibekit:auto-prompt:start -->"
 CODEX_PROMPT_END = "<!-- vibekit:auto-prompt:end -->"
+AGENT_CHECKLIST_PATH = ".vibe/AGENT_CHECKLIST.md"
+LATEST_CONTEXT_PATH = ".vibe/context/LATEST_CONTEXT.md"
+CONFIGURE_CMD = "python3 scripts/vibe.py configure --apply"
+DOCTOR_CMD = "python3 scripts/vibe.py doctor --full"
+AGENT_TEMPLATE_ORDER = ("codex", "claude", "copilot", "cursor", "gemini")
 
 
 @dataclass(frozen=True)
@@ -100,7 +110,7 @@ def _is_allowed(rel: str) -> bool:
         return True
     p = PurePosixPath(rel)
     if p.parent == PurePosixPath("scripts") and p.suffix == ".py":
-        return p.name in {"vibe.py", "vibekit.py", "setup_vibe_env.py", "install_hooks.py"}
+        return p.name in {"vibe.py", "vibekit.py", "setup_vibe_env.py", "agent_templates.py", "install_hooks.py"}
     if p.parent == PurePosixPath(".vibe/brain") and p.suffix == ".py":
         return True
     return False
@@ -142,54 +152,86 @@ def _apply_gitignore(root: Path, *, apply: bool) -> None:
         gi.write_text(text, encoding="utf-8")
 
 
-def _write_agent_instructions(root: Path, agent: str, *, force: bool, apply: bool) -> None:
-    agent = agent.lower().strip()
-    templates: dict[str, tuple[str, str]] = {
+def _load_agent_templates_module():
+    candidate = Path(__file__).resolve().parent / "scripts" / "agent_templates.py"
+    if not candidate.exists():
+        return None
+    spec = importlib.util.spec_from_file_location("vibekit_agent_templates", candidate)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _agent_common_lines(*, include_checklist: bool = True) -> list[str]:
+    lines: list[str] = []
+    if include_checklist:
+        lines.append(f"- Read: `{AGENT_CHECKLIST_PATH}`")
+    lines.append(f"- Read: `{LATEST_CONTEXT_PATH}`")
+    lines.append(f"- (Once) Run: `{CONFIGURE_CMD}`")
+    lines.append(f"- Run: `{DOCTOR_CMD}`")
+    return lines
+
+
+def _render_agent_section(title: str, lines: list[str]) -> str:
+    if not lines:
+        return ""
+    return title + "\n" + "\n".join(lines) + "\n"
+
+
+def _agent_template_map() -> dict[str, tuple[str, str]]:
+    mod = _load_agent_templates_module()
+    if mod is not None:
+        return {key: mod.render_agent_template(key) for key in AGENT_TEMPLATE_ORDER}
+    quickstart = _render_agent_section("## Quick start", _agent_common_lines())
+    repo_rules = _render_agent_section(
+        "## Repo rules",
+        [
+            "- Avoid repo-wide formatting and unrelated cleanup refactors.",
+            "- Treat placeholders/tokens as runtime contracts (e.g. `<...>`, `{0}`, `%s`).",
+            "- Prefer small, localized edits; keep behavior stable.",
+        ],
+    )
+    return {
         "codex": (
             "AGENTS.md",
             "# Agent Notes\n\n"
-            "## Quick start\n"
-            "- Read: `.vibe/context/LATEST_CONTEXT.md`\n"
-            "- (Once) Run: `python3 scripts/vibe.py configure --apply`\n"
-            "- Run: `python3 scripts/vibe.py doctor --full`\n\n"
-            "## Repo rules\n"
-            "- Avoid repo-wide formatting and unrelated cleanup refactors.\n"
-            "- Treat placeholders/tokens as runtime contracts (e.g. `<...>`, `{0}`, `%s`).\n"
-            "- Prefer small, testable edits; keep behavior stable.\n",
+            f"{quickstart}\n"
+            f"{repo_rules}",
         ),
         "claude": (
             "CLAUDE.md",
             "# Project Instructions\n\n"
-            "- Read: `.vibe/context/LATEST_CONTEXT.md`\n"
-            "- (Once) Run: `python3 scripts/vibe.py configure --apply`\n"
-            "- Run: `python3 scripts/vibe.py doctor --full`\n"
-            "- Avoid repo-wide formatting/unrelated refactors.\n",
+            f"{quickstart}\n"
+            f"{repo_rules}",
         ),
         "copilot": (
             ".github/copilot-instructions.md",
             "# Copilot Instructions\n\n"
-            "- Use `.vibe/context/LATEST_CONTEXT.md` for repo context.\n"
-            "- (Once) Run: `python3 scripts/vibe.py configure --apply`\n"
-            "- Run: `python3 scripts/vibe.py doctor --full`\n"
-            "- Prefer small, localized changes.\n",
+            f"{quickstart}\n"
+            f"{repo_rules}",
         ),
         "cursor": (
             ".cursor/rules/vibekit.md",
             "# Cursor Rules (vibe-kit)\n\n"
-            "- Read: `.vibe/context/LATEST_CONTEXT.md`\n"
-            "- (Once) Run: `python3 scripts/vibe.py configure --apply`\n"
-            "- Run: `python3 scripts/vibe.py doctor --full`\n",
+            f"{quickstart}\n"
+            f"{repo_rules}",
         ),
         "gemini": (
             "GEMINI.md",
             "# Gemini Instructions\n\n"
-            "- Read: `.vibe/context/LATEST_CONTEXT.md`\n"
-            "- (Once) Run: `python3 scripts/vibe.py configure --apply`\n"
-            "- Run: `python3 scripts/vibe.py doctor --full`\n",
+            f"{quickstart}\n"
+            f"{repo_rules}",
         ),
     }
+
+
+def _write_agent_instructions(root: Path, agent: str, *, force: bool, apply: bool) -> None:
+    agent = agent.lower().strip()
+    templates = _agent_template_map()
     if agent == "all":
-        for key in ("codex", "claude", "copilot", "cursor", "gemini"):
+        for key in AGENT_TEMPLATE_ORDER:
             rel, content = templates[key]
             _safe_write(root / rel, content.encode("utf-8"), force=force, apply=apply)
         return
@@ -256,6 +298,61 @@ def _resolve_release_assets(base_dir: Path) -> ReleaseAssets:
     )
 
 
+def _download_file(url: str, dest: Path) -> None:
+    req = urllib.request.Request(url, headers={"User-Agent": "vibe-kit-seed-installer/1"})
+    with urllib.request.urlopen(req) as resp, dest.open("wb") as out:
+        shutil.copyfileobj(resp, out)
+
+
+def _bootstrap_assets_from_dir(base_dir: Path) -> ReleaseAssets:
+    return _resolve_release_assets(base_dir.resolve())
+
+
+def _bootstrap_assets_from_url(base_url: str, work_dir: Path) -> ReleaseAssets:
+    base = base_url.rstrip("/") + "/"
+    sums_path = work_dir / "SHA256SUMS"
+    installer_path = work_dir / "vibekit_seed_install.py"
+    _download_file(urllib.parse.urljoin(base, "SHA256SUMS"), sums_path)
+    _download_file(urllib.parse.urljoin(base, "vibekit_seed_install.py"), installer_path)
+    sums = _parse_sha256sums(sums_path.read_text(encoding="utf-8", errors="ignore"))
+    seed_names = sorted(name for name in sums if name.startswith("VIBEKIT_SEED-") and name.endswith(".md"))
+    if len(seed_names) != 1:
+        raise ValueError(f"expected exactly one seed file in SHA256SUMS, found={len(seed_names)}")
+    _download_file(urllib.parse.urljoin(base, seed_names[0]), work_dir / seed_names[0])
+    return _resolve_release_assets(work_dir)
+
+
+def _bootstrap_assets_from_gh(release_repo: str, release_tag: str | None, work_dir: Path) -> ReleaseAssets:
+    if shutil.which("gh") is None:
+        raise RuntimeError("missing `gh` CLI. Install GitHub CLI first or use --assets-dir/--assets-url-base.")
+    cmd = [
+        "gh",
+        "release",
+        "download",
+        "--repo",
+        release_repo,
+        "--pattern",
+        "VIBEKIT_SEED-*.md",
+        "--pattern",
+        "vibekit_seed_install.py",
+        "--pattern",
+        "SHA256SUMS",
+        "--dir",
+        str(work_dir),
+    ]
+    if release_tag:
+        cmd.insert(3, release_tag)
+    subprocess.check_call(cmd)
+    return _resolve_release_assets(work_dir)
+
+
+def _load_release_assets_from_dir(base_dir: Path) -> ReleaseAssets:
+    base = base_dir.expanduser().resolve()
+    if not base.exists() or not base.is_dir():
+        raise ValueError(f"assets dir not found: {base}")
+    return _resolve_release_assets(base)
+
+
 def _write_ci_guard_workflow(root: Path, *, force: bool, apply: bool) -> bool:
     rel = Path(".github/workflows/vibekit-guard.yml")
     path = root / rel
@@ -270,7 +367,6 @@ def _write_ci_guard_workflow(root: Path, *, force: bool, apply: bool) -> bool:
         on:
           pull_request:
           push:
-            branches: [main]
 
         jobs:
           vibe:
@@ -304,6 +400,8 @@ def _bootstrap(
     root: Path,
     release_repo: str,
     release_tag: str | None,
+    assets_dir: Path | None,
+    assets_url_base: str | None = None,
     force: bool,
     apply: bool,
     agent: str | None,
@@ -314,66 +412,127 @@ def _bootstrap(
     write_ci_guard: bool,
 ) -> int:
     root = root.resolve()
-    if shutil.which("gh") is None:
-        print("[bootstrap] missing `gh` CLI. Install GitHub CLI first.", file=sys.stderr)
-        return 2
-
-    with tempfile.TemporaryDirectory(prefix="vibekit-bootstrap-") as td:
-        dl = Path(td)
-        cmd = [
-            "gh",
-            "release",
-            "download",
-            "--repo",
-            release_repo,
-            "--pattern",
-            "VIBEKIT_SEED-*.md",
-            "--pattern",
-            "vibekit_seed_install.py",
-            "--pattern",
-            "SHA256SUMS",
-            "--dir",
-            str(dl),
-        ]
-        if release_tag:
-            cmd.insert(3, release_tag)
+    assets: ReleaseAssets
+    if assets_dir is not None:
         try:
-            subprocess.check_call(cmd)
-            assets = _resolve_release_assets(dl)
-        except (subprocess.CalledProcessError, ValueError) as e:
-            print(f"[bootstrap] failed to download/verify release assets: {e}", file=sys.stderr)
+            assets = _load_release_assets_from_dir(assets_dir)
+            print(f"[bootstrap] using local assets: {assets_dir.expanduser().resolve()}")
+        except ValueError as e:
+            print(f"[bootstrap] failed to load local assets: {e}", file=sys.stderr)
+            return 2
+    elif assets_url_base:
+        with tempfile.TemporaryDirectory(prefix="vibekit-bootstrap-url-") as td:
+            dl = Path(td)
+            try:
+                assets = _bootstrap_assets_from_url(assets_url_base, dl)
+                print(f"[bootstrap] using assets URL base: {assets_url_base}")
+                return _bootstrap_with_assets(
+                    assets=assets,
+                    root=root,
+                    force=force,
+                    apply=apply,
+                    agent=agent,
+                    run_setup=run_setup,
+                    post_configure=post_configure,
+                    post_doctor=post_doctor,
+                    post_hooks=post_hooks,
+                    write_ci_guard=write_ci_guard,
+                )
+            except (OSError, urllib.error.URLError, ValueError) as e:
+                print(f"[bootstrap] failed to download/verify release assets: {e}", file=sys.stderr)
+                return 2
+    else:
+        if shutil.which("gh") is None:
+            print("[bootstrap] missing `gh` CLI. Install GitHub CLI first or pass --assets-dir/--assets-url-base.", file=sys.stderr)
             return 2
 
-        rc = _install(
-            seed_md=assets.seed_md,
-            root=root,
-            expected_seed_sha256=assets.seed_sha256,
-            force=force,
-            apply=apply,
-            agent=agent,
-            run_setup=run_setup,
-        )
-        if rc != 0:
-            return rc
-
-        if write_ci_guard:
-            written = _write_ci_guard_workflow(root, force=force, apply=apply)
-            if written:
-                print("[bootstrap] wrote: .github/workflows/vibekit-guard.yml")
-            else:
-                print("[bootstrap] ci guard exists (use --force to overwrite)")
-
-        if apply:
+        with tempfile.TemporaryDirectory(prefix="vibekit-bootstrap-") as td:
+            dl = Path(td)
+            cmd = [
+                "gh",
+                "release",
+                "download",
+                "--repo",
+                release_repo,
+                "--pattern",
+                "VIBEKIT_SEED-*.md",
+                "--pattern",
+                "vibekit_seed_install.py",
+                "--pattern",
+                "SHA256SUMS",
+                "--dir",
+                str(dl),
+            ]
+            if release_tag:
+                cmd.insert(3, release_tag)
             try:
-                if post_configure:
-                    _run_vibe(root, ["configure", "--apply"])
-                if post_doctor:
-                    _run_vibe(root, ["doctor", "--full"])
-                if post_hooks:
-                    _run_vibe(root, ["hooks", "--install"])
-            except (subprocess.CalledProcessError, RuntimeError) as e:
-                print(f"[bootstrap] post-install step failed: {e}", file=sys.stderr)
+                subprocess.check_call(cmd)
+                assets = _resolve_release_assets(dl)
+            except (subprocess.CalledProcessError, ValueError) as e:
+                print(f"[bootstrap] failed to download/verify release assets: {e}", file=sys.stderr)
                 return 2
+    return _bootstrap_with_assets(
+        assets=assets,
+        root=root,
+        force=force,
+        apply=apply,
+        agent=agent,
+        run_setup=run_setup,
+        post_configure=post_configure,
+        post_doctor=post_doctor,
+        post_hooks=post_hooks,
+        write_ci_guard=write_ci_guard,
+    )
+
+
+def _bootstrap_with_assets(
+    *,
+    assets: ReleaseAssets,
+    root: Path,
+    force: bool,
+    apply: bool,
+    agent: str | None,
+    run_setup: bool,
+    post_configure: bool,
+    post_doctor: bool,
+    post_hooks: bool,
+    write_ci_guard: bool,
+) -> int:
+    rc = _install(
+        seed_md=assets.seed_md,
+        root=root,
+        expected_seed_sha256=assets.seed_sha256,
+        force=force,
+        apply=apply,
+        agent=agent,
+        run_setup=run_setup,
+    )
+    if rc != 0:
+        return rc
+
+    if apply:
+        steps: list[tuple[str, list[str]]] = []
+        if post_configure:
+            steps.append(("configure", ["configure", "--apply"]))
+        if post_doctor:
+            steps.append(("doctor", ["doctor", "--full"]))
+        if post_hooks:
+            steps.append(("hooks", ["hooks", "--install"]))
+        for name, step_args in steps:
+            try:
+                print(f"[bootstrap] running post-step: {name}")
+                _run_vibe(root, step_args)
+                print(f"[bootstrap] post-step ok: {name}")
+            except (subprocess.CalledProcessError, RuntimeError) as e:
+                print(f"[bootstrap] {name} step failed: {e}", file=sys.stderr)
+                return 2
+
+    if write_ci_guard:
+        written = _write_ci_guard_workflow(root, force=force, apply=apply)
+        if written:
+            print("[bootstrap] wrote: .github/workflows/vibekit-guard.yml")
+        else:
+            print("[bootstrap] ci guard exists (use --force to overwrite)")
 
     return 0
 
@@ -674,6 +833,8 @@ def main(argv: list[str]) -> int:
     p_boot.add_argument("--root", type=Path, default=Path("."), help="Install root (project directory).")
     p_boot.add_argument("--repo", default=DEFAULT_RELEASE_REPO, help="GitHub repo in OWNER/REPO format.")
     p_boot.add_argument("--tag", help="Release tag to download (default: latest).")
+    p_boot.add_argument("--assets-dir", type=Path, help="Use an existing directory with release assets instead of downloading via `gh`.")
+    p_boot.add_argument("--assets-url-base", help="Download release assets from a base URL instead of using `gh`.")
     p_boot.add_argument("--force", action="store_true", help="Overwrite existing files.")
     p_boot.add_argument("--apply", action="store_true", help="Actually write files (default is dry-run).")
     p_boot.add_argument("--agent", help="Generate agent instruction files: codex|claude|copilot|cursor|gemini|all")
@@ -728,6 +889,8 @@ def main(argv: list[str]) -> int:
             root=args.root,
             release_repo=args.repo,
             release_tag=args.tag,
+            assets_dir=args.assets_dir,
+            assets_url_base=args.assets_url_base,
             force=bool(args.force),
             apply=bool(args.apply),
             agent=args.agent,

@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import ast
-import fnmatch
 import json
 import re
 import sys
@@ -13,40 +11,14 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
 from context_db import connect, is_excluded, load_config, normalize_rel
-
-
-JS_EXTS = [
-    ".ts",
-    ".tsx",
-    ".js",
-    ".jsx",
-    ".mjs",
-    ".cjs",
-    ".mts",
-    ".cts",
-]
-
-JS_IMPORT_RE = re.compile(
-    r"""
-    (?:
-      \bimport\s+(?:[\w*\s{},]*\s+from\s+)? |
-      \bexport\s+(?:[\w*\s{},]*\s+from\s+) |
-      \brequire\s*\(\s* |
-      \bimport\s*\(\s*
-    )
-    ['"](?P<spec>[^'"]+)['"]
-    """,
-    re.VERBOSE,
+from dep_extractors import (
+    Dep,
+    build_python_module_index as build_python_dep_index,
+    js_aliases as load_js_aliases,
+    js_deps_for_file as extract_js_deps_for_file,
+    python_deps_for_file as extract_python_deps_for_file,
 )
-
-
-@dataclass(frozen=True)
-class Dep:
-    from_file: str
-    to_file: str
-    kind: str
-    line: int | None = None
-    detail: str | None = None
+from path_globs import matches_include_globs
 
 
 @dataclass(frozen=True)
@@ -59,12 +31,7 @@ class Rule:
 
 
 def _matches_glob(rel_posix: str, glob: str) -> bool:
-    if fnmatch.fnmatch(rel_posix, glob):
-        return True
-    # A common convenience: treat "**/x" as also matching "x" at root.
-    if glob.startswith("**/") and fnmatch.fnmatch(rel_posix, glob[3:]):
-        return True
-    return False
+    return matches_include_globs(rel_posix, [glob])
 
 
 def _matches_any(rel_posix: str, globs: list[str]) -> bool:
@@ -74,6 +41,10 @@ def _matches_any(rel_posix: str, globs: list[str]) -> bool:
     return False
 
 
+def _build_python_module_index(cfg, py_files: list[str]) -> dict[str, str]:
+    return build_python_dep_index(cfg, py_files)
+
+
 def _read_text(path: Path) -> str | None:
     try:
         return path.read_text(encoding="utf-8")
@@ -81,10 +52,6 @@ def _read_text(path: Path) -> str | None:
         return path.read_text(encoding="utf-8", errors="ignore")
     except OSError:
         return None
-
-
-def _line_number(text: str, idx: int) -> int:
-    return text.count("\n", 0, idx) + 1
 
 
 def _get_indexed_files(cfg) -> list[str]:
@@ -111,281 +78,20 @@ def _iter_files_by_glob(cfg, include_globs: list[str]) -> list[str]:
     return sorted({p: None for p in out}.keys())
 
 
-def _candidate_python_roots(cfg) -> list[str]:
-    arch = cfg.architecture or {}
-    roots_raw = arch.get("python_roots")
-    roots: list[str] = []
-    if isinstance(roots_raw, list):
-        roots = [str(x).strip().strip("/").replace("\\", "/") for x in roots_raw if isinstance(x, str) and x.strip()]
-
-    # Heuristic defaults: prefer `src/` if present.
-    defaults: list[str] = []
-    if (cfg.root / "src").exists():
-        defaults.append("src")
-    defaults.append(".")
-
-    merged: list[str] = []
-    for r in [*roots, *defaults]:
-        rr = r or "."
-        if rr not in merged:
-            merged.append(rr)
-    return merged
+def _python_deps_for_file(cfg, *, from_rel: str, text: str, module_to_file: dict[str, str]) -> Iterable[Dep]:
+    return extract_python_deps_for_file(cfg, from_rel=from_rel, text=text, module_to_file=module_to_file)
 
 
 def _build_python_module_index(cfg, py_files: list[str]) -> dict[str, str]:
-    roots = _candidate_python_roots(cfg)
-    module_to_file: dict[str, str] = {}
-    for rel_s in py_files:
-        p = PurePosixPath(rel_s)
-        if p.suffix != ".py":
-            continue
-        for root in roots:
-            if root not in {".", ""}:
-                pref = root.rstrip("/") + "/"
-                if not rel_s.startswith(pref):
-                    continue
-                sub = rel_s[len(pref) :]
-            else:
-                sub = rel_s
-
-            parts = [x for x in sub.split("/") if x]
-            if not parts:
-                continue
-            last = parts[-1]
-            if not last.endswith(".py"):
-                continue
-            parts[-1] = last[:-3]
-            if parts[-1] == "__init__":
-                parts = parts[:-1]
-            if not parts:
-                continue
-
-            mod = ".".join(parts)
-            module_to_file.setdefault(mod, rel_s)
-            break
-    return module_to_file
-
-
-def _resolve_python_module(module_to_file: dict[str, str], module: str) -> str | None:
-    cur = module.strip(".")
-    while cur:
-        hit = module_to_file.get(cur)
-        if hit:
-            return hit
-        if "." not in cur:
-            break
-        cur = cur.rsplit(".", 1)[0]
-    return None
-
-
-def _resolve_python_relative(
-    *,
-    cfg,
-    from_rel: str,
-    level: int,
-    module: str | None,
-    name: str | None = None,
-) -> str | None:
-    base = PurePosixPath(from_rel).parent
-    for _ in range(max(0, int(level) - 1)):
-        base = base.parent
-
-    parts: list[str] = []
-    if module:
-        parts.extend([p for p in module.split(".") if p])
-    if name:
-        parts.extend([p for p in name.split(".") if p])
-
-    cand = base.joinpath(*parts) if parts else base
-    candidates = [
-        cand.with_suffix(".py"),
-        cand / "__init__.py",
-    ]
-    root_res = cfg.root.resolve()
-    for rel_p in candidates:
-        abs_p = (cfg.root / rel_p).resolve(strict=False)
-        try:
-            abs_p.relative_to(root_res)
-        except ValueError:
-            continue
-        if abs_p.exists() and abs_p.is_file():
-            return normalize_rel(abs_p.relative_to(cfg.root))
-    return None
-
-
-def _python_deps_for_file(cfg, *, from_rel: str, text: str, module_to_file: dict[str, str]) -> Iterable[Dep]:
-    try:
-        tree = ast.parse(text)
-    except SyntaxError:
-        return []
-
-    deps: list[Dep] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                mod = (alias.name or "").strip()
-                if not mod:
-                    continue
-                to_rel = _resolve_python_module(module_to_file, mod)
-                if not to_rel:
-                    continue
-                deps.append(Dep(from_file=from_rel, to_file=to_rel, kind="py_import", line=int(getattr(node, "lineno", 0) or 0) or None, detail=mod))
-        elif isinstance(node, ast.ImportFrom):
-            level = int(getattr(node, "level", 0) or 0)
-            module = getattr(node, "module", None)
-            module_s = str(module).strip() if module else None
-
-            if level > 0:
-                # Relative import: resolve using file paths.
-                if node.names:
-                    for alias in node.names:
-                        name = (alias.name or "").strip()
-                        if name == "*":
-                            name = None
-                        to_rel = _resolve_python_relative(cfg=cfg, from_rel=from_rel, level=level, module=module_s, name=name)
-                        if to_rel:
-                            detail = f"{'.' * level}{module_s + '.' if module_s else ''}{alias.name}".strip(".")
-                            deps.append(
-                                Dep(
-                                    from_file=from_rel,
-                                    to_file=to_rel,
-                                    kind="py_from",
-                                    line=int(getattr(node, "lineno", 0) or 0) or None,
-                                    detail=detail,
-                                )
-                            )
-                continue
-
-            if not module_s:
-                continue
-
-            # Absolute from-import: try to resolve submodules first, then module.
-            resolved_any = False
-            for alias in node.names:
-                name = (alias.name or "").strip()
-                if not name or name == "*":
-                    continue
-                to_rel = _resolve_python_module(module_to_file, f"{module_s}.{name}")
-                if to_rel:
-                    deps.append(
-                        Dep(
-                            from_file=from_rel,
-                            to_file=to_rel,
-                            kind="py_from",
-                            line=int(getattr(node, "lineno", 0) or 0) or None,
-                            detail=f"{module_s}.{name}",
-                        )
-                    )
-                    resolved_any = True
-
-            if resolved_any:
-                continue
-
-            to_rel = _resolve_python_module(module_to_file, module_s)
-            if to_rel:
-                deps.append(
-                    Dep(
-                        from_file=from_rel,
-                        to_file=to_rel,
-                        kind="py_from",
-                        line=int(getattr(node, "lineno", 0) or 0) or None,
-                        detail=module_s,
-                    )
-                )
-
-    return deps
+    return build_python_dep_index(cfg, py_files)
 
 
 def _js_aliases(cfg) -> dict[str, str]:
-    arch = cfg.architecture or {}
-    raw = arch.get("js_aliases")
-    if not isinstance(raw, dict):
-        return {}
-    out: dict[str, str] = {}
-    for k, v in raw.items():
-        if not isinstance(k, str) or not k.strip():
-            continue
-        if not isinstance(v, str) or not v.strip():
-            continue
-        out[k] = v
-    return out
-
-
-def _apply_js_alias(spec: str, aliases: dict[str, str]) -> str:
-    if not aliases:
-        return spec
-    best_k = None
-    for k in aliases:
-        if spec.startswith(k) and (best_k is None or len(k) > len(best_k)):
-            best_k = k
-    if best_k is None:
-        return spec
-    prefix = aliases[best_k].rstrip("/") + "/"
-    rest = spec[len(best_k) :].lstrip("/")
-    return prefix + rest
-
-
-def _resolve_js_spec(cfg, *, from_rel: str, spec: str, aliases: dict[str, str]) -> str | None:
-    spec2 = _apply_js_alias(spec, aliases).replace("\\", "/")
-    if not spec2:
-        return None
-
-    from_dir = PurePosixPath(from_rel).parent
-    # Relative and aliased paths only (ignore npm packages).
-    if spec2.startswith("."):
-        cand = (cfg.root / from_dir / spec2).resolve(strict=False)
-    else:
-        # Alias-mapped paths resolve from repo root.
-        if not (spec != spec2):
-            return None
-        cand = (cfg.root / spec2).resolve(strict=False)
-
-    root_res = cfg.root.resolve()
-    try:
-        rel = cand.relative_to(root_res)
-    except ValueError:
-        return None
-
-    # If an extension is present and exists, use it.
-    if rel.suffix and (cfg.root / rel).is_file():
-        return normalize_rel(rel)
-
-    # Try extension candidates.
-    for ext in JS_EXTS:
-        p = cfg.root / rel.with_suffix(ext)
-        if p.is_file():
-            return normalize_rel(rel.with_suffix(ext))
-
-    # Try directory index files.
-    p_dir = cfg.root / rel
-    if p_dir.is_dir():
-        for ext in JS_EXTS:
-            p = p_dir / f"index{ext}"
-            if p.is_file():
-                return normalize_rel((rel / f"index{ext}"))
-
-    return None
+    return load_js_aliases(cfg)
 
 
 def _js_deps_for_file(cfg, *, from_rel: str, text: str, aliases: dict[str, str]) -> Iterable[Dep]:
-    deps: list[Dep] = []
-    for m in JS_IMPORT_RE.finditer(text):
-        spec = (m.group("spec") or "").strip()
-        if not spec:
-            continue
-        to_rel = _resolve_js_spec(cfg, from_rel=from_rel, spec=spec, aliases=aliases)
-        if not to_rel:
-            continue
-        deps.append(
-            Dep(
-                from_file=from_rel,
-                to_file=to_rel,
-                kind="js_import",
-                line=_line_number(text, m.start()),
-                detail=spec,
-            )
-        )
-    return deps
+    return extract_js_deps_for_file(cfg, from_rel=from_rel, text=text, aliases=aliases)
 
 
 def _parse_rules(cfg) -> tuple[list[Rule], list[dict[str, Any]]]:
@@ -572,7 +278,7 @@ def main(argv: list[str]) -> int:
 
     # Build python module index only for python candidates; resolve targets in full python set.
     py_files = [f for f in files if f.endswith(".py")]
-    module_to_file = _build_python_module_index(cfg, py_files)
+    module_to_file = build_python_dep_index(cfg, py_files)
     aliases = _js_aliases(cfg)
 
     violations: list[dict[str, Any]] = []

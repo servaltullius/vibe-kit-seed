@@ -50,6 +50,11 @@ class TestAgentsDoctor(unittest.TestCase):
             self.assertEqual(rc, 1)
             self.assertIn("[agents-doctor] WARN", out.getvalue())
             self.assertIn("python3 scripts/vibe.py doctor --full", out.getvalue())
+            self.assertIn(".vibe/AGENT_CHECKLIST.md", out.getvalue())
+            self.assertIn("[agents-doctor] FIX:", out.getvalue())
+            self.assertIn("[agents-doctor] FIX: AGENTS.md add these lines:", out.getvalue())
+            self.assertIn(".vibe/AGENT_CHECKLIST.md", out.getvalue())
+            self.assertIn("Example:", out.getvalue())
 
 
 if __name__ == "__main__":

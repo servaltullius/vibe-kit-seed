@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import fnmatch
 import json
 import shutil
 import subprocess
@@ -14,6 +13,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
 from context_db import is_excluded, load_config
+from path_globs import matches_include_globs
 
 
 COMMIT_MARKER = "__VIBE_COMMIT__"
@@ -35,14 +35,7 @@ class CommitMeta:
 
 
 def _matches_include(rel_posix: str, include_globs: list[str]) -> bool:
-    if not include_globs:
-        return True
-    for g in include_globs:
-        if fnmatch.fnmatch(rel_posix, g):
-            return True
-        if g.startswith("**/") and fnmatch.fnmatch(rel_posix, g[3:]):
-            return True
-    return False
+    return matches_include_globs(rel_posix, include_globs)
 
 
 def parse_git_log_name_only(text: str) -> list[list[str]]:

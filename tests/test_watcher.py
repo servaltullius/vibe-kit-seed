@@ -78,6 +78,22 @@ class TestWatcherPollingDiff(unittest.TestCase):
         self.assertEqual(changed, [Path("/repo/a.py"), Path("/repo/c.py")])
         self.assertTrue(has_deleted)
 
+    def test_classify_tracked_files_separates_modified_and_created(self) -> None:
+        previous = {
+            Path("/repo/a.py"): 1.0,
+            Path("/repo/b.py"): 2.0,
+        }
+        current = {
+            Path("/repo/a.py"): 3.0,
+            Path("/repo/c.py"): 1.0,
+        }
+
+        modified, created, has_deleted = watcher._classify_tracked_files(previous, current)
+
+        self.assertEqual(modified, [Path("/repo/a.py")])
+        self.assertEqual(created, [Path("/repo/c.py")])
+        self.assertTrue(has_deleted)
+
     def test_reconcile_tracked_files_detects_new_modified_and_deleted_files(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -92,21 +108,21 @@ class TestWatcherPollingDiff(unittest.TestCase):
             existing.write_text("x = 2\n", encoding="utf-8")
             os.utime(existing, (original_mtime + 5, original_mtime + 5))
 
-            created = root / "src" / "new.py"
-            created.write_text("y = 1\n", encoding="utf-8")
-            os.utime(created, (original_mtime + 10, original_mtime + 10))
+            created_file = root / "src" / "new.py"
+            created_file.write_text("y = 1\n", encoding="utf-8")
+            os.utime(created_file, (original_mtime + 10, original_mtime + 10))
 
             deleted = root / "src" / "old.py"
             deleted.write_text("z = 1\n", encoding="utf-8")
             tracked[deleted] = original_mtime
             deleted.unlink()
 
-            current, changed, has_deleted = watcher._reconcile_tracked_files(cfg, tracked)
+            current, modified, created, has_deleted = watcher._reconcile_tracked_files(cfg, tracked)
 
             self.assertIn(existing, current)
-            self.assertIn(created, current)
-            self.assertIn(existing, changed)
-            self.assertIn(created, changed)
+            self.assertIn(created_file, current)
+            self.assertIn(existing, modified)
+            self.assertIn(created_file, created)
             self.assertTrue(has_deleted)
 
 

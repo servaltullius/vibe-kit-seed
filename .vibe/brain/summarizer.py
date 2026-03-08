@@ -30,6 +30,58 @@ def _meta_set(con, key: str, value: str) -> None:
     )
 
 
+def _recent_from_change_table(con, limit: int) -> list[dict]:
+    entries = con.execute(
+        "SELECT path, changed_at, kind FROM recent_changes ORDER BY changed_at DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    out: list[dict] = []
+    seen: set[str] = set()
+    for item in entries:
+        path = str(item["path"] or "").strip()
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        row = con.execute("SELECT path, mtime, loc FROM files WHERE path = ?", (path,)).fetchone()
+        if row:
+            out.append({"path": row["path"], "mtime": row["mtime"], "loc": row["loc"], "kind": item["kind"] or "changed"})
+        else:
+            out.append({"path": path, "mtime": item["changed_at"] or 0, "loc": "-", "kind": item["kind"] or "deleted"})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _recent_from_change_meta(con, limit: int) -> list[dict]:
+    raw = _meta_get(con, "recent_changes_json")
+    if not raw:
+        return []
+    try:
+        entries = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(entries, list):
+        return []
+
+    out: list[dict] = []
+    seen: set[str] = set()
+    for item in entries:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("path") or "").strip()
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        row = con.execute("SELECT path, mtime, loc FROM files WHERE path = ?", (path,)).fetchone()
+        if row:
+            out.append({"path": row["path"], "mtime": row["mtime"], "loc": row["loc"], "kind": item.get("kind") or "changed"})
+        else:
+            out.append({"path": path, "mtime": item.get("ts") or 0, "loc": "-", "kind": item.get("kind") or "deleted"})
+        if len(out) >= limit:
+            break
+    return out
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Generate `.vibe/context/LATEST_CONTEXT.md`.")
     parser.add_argument("--full", action="store_true", help="Treat as a full refresh (reset recent window).")
@@ -41,10 +93,14 @@ def main(argv: list[str]) -> int:
         last_ts_s = _meta_get(con, "last_summary_ts")
         last_ts = float(last_ts_s) if last_ts_s and not args.full else 0.0
 
-        recent = con.execute(
-            "SELECT path, mtime, loc FROM files WHERE mtime > ? ORDER BY mtime DESC LIMIT ?",
-            (last_ts, cfg.max_recent_files),
-        ).fetchall()
+        recent = _recent_from_change_table(con, cfg.max_recent_files)
+        if not recent:
+            recent = _recent_from_change_meta(con, cfg.max_recent_files)
+        if not recent:
+            recent = con.execute(
+                "SELECT path, mtime, loc FROM files WHERE mtime > ? ORDER BY mtime DESC LIMIT ?",
+                (last_ts, cfg.max_recent_files),
+            ).fetchall()
         if not recent:
             recent = con.execute(
                 "SELECT path, mtime, loc FROM files ORDER BY mtime DESC LIMIT ?",
@@ -65,7 +121,9 @@ def main(argv: list[str]) -> int:
         lines.append("# LATEST_CONTEXT\n")
         lines.append("## [1] Recent changes (Top N)\n")
         for r in recent:
-            lines.append(f"- {r['path']} (loc={r['loc']})")
+            kind = str(r["kind"]) if isinstance(r, dict) and r.get("kind") else "changed"
+            kind_suffix = f", {kind}" if kind else ""
+            lines.append(f"- {r['path']} (loc={r['loc']}{kind_suffix})")
 
         lines.append("\n## [2] Critical map\n")
         if critical:
@@ -109,7 +167,7 @@ def main(argv: list[str]) -> int:
         largest = hotspots.get("largest_files") if isinstance(hotspots, dict) else None
         symbol_hotspots = hotspots.get("symbol_hotspots") if isinstance(hotspots, dict) else None
         if fan_in:
-            lines.append("- project fan-in (top 5):")
+            lines.append("- dependency fan-in (top 5):")
             for r in fan_in[:5]:
                 lines.append(f"  - {r['target']}: {r['count']}")
         if largest:
@@ -180,6 +238,8 @@ def main(argv: list[str]) -> int:
 
         # Update timestamp only after successful write.
         _meta_set(con, "last_summary_ts", str(time.time()))
+        con.execute("DELETE FROM recent_changes")
+        _meta_set(con, "recent_changes_json", "[]")
         con.commit()
 
         print(f"[summarizer] wrote: {cfg.latest_file}")

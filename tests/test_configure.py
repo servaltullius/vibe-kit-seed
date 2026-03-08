@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import io
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -108,6 +111,97 @@ class TestConfigureTypecheckRecommendation(unittest.TestCase):
             self.assertEqual(cmd, ["pyright"])
             self.assertIn("pyproject.toml", when_globs or [])
             self.assertTrue(meta.get("pyright_present"))
+
+    def test_main_reports_polyglot_detected_stacks_and_next_steps(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / ".vibe").mkdir(parents=True, exist_ok=True)
+            (root / ".vibe" / "config.json").write_text(
+                json.dumps(
+                    {
+                        "project_name": "demo",
+                        "exclude_dirs": [],
+                        "include_globs": ["**/*.py", "**/*.ts", "**/*.go"],
+                        "quality_gates": {},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (root / "package.json").write_text(
+                json.dumps(
+                    {
+                        "name": "demo",
+                        "packageManager": "pnpm@9.0.0",
+                        "scripts": {"typecheck": "tsc --noEmit"},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (root / "tsconfig.json").write_text("{}\n", encoding="utf-8")
+            (root / "go.mod").write_text("module demo\n", encoding="utf-8")
+
+            out = io.StringIO()
+            with redirect_stdout(out), patch.object(vibe_configure, "_repo_root", return_value=root):
+                rc = vibe_configure.main(["--apply"])
+
+            self.assertEqual(rc, 0)
+            text = out.getvalue()
+            self.assertIn("[configure] detected stacks: node/pnpm, go", text)
+            self.assertIn("polyglot/monorepo signals found", text)
+            self.assertIn("recommended typecheck: pnpm run typecheck", text)
+            self.assertIn("next: Run `python3 scripts/vibe.py doctor --full`", text)
+
+    def test_main_reports_monorepo_hints(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / ".vibe").mkdir(parents=True, exist_ok=True)
+            (root / ".vibe" / "config.json").write_text(
+                json.dumps(
+                    {
+                        "project_name": "demo",
+                        "exclude_dirs": [],
+                        "include_globs": ["**/*.py", "**/*.ts"],
+                        "quality_gates": {},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (root / "pnpm-workspace.yaml").write_text("packages:\n  - apps/*\n", encoding="utf-8")
+            (root / "package.json").write_text(
+                json.dumps({"name": "root", "packageManager": "pnpm@9.0.0", "scripts": {"typecheck": "tsc --noEmit"}}) + "\n",
+                encoding="utf-8",
+            )
+            (root / "apps" / "web").mkdir(parents=True, exist_ok=True)
+            (root / "apps" / "web" / "package.json").write_text(json.dumps({"name": "web"}) + "\n", encoding="utf-8")
+            (root / "tsconfig.json").write_text("{}\n", encoding="utf-8")
+
+            out = io.StringIO()
+            with redirect_stdout(out), patch.object(vibe_configure, "_repo_root", return_value=root):
+                rc = vibe_configure.main([])
+
+            self.assertEqual(rc, 0)
+            text = out.getvalue()
+            self.assertIn("[configure] monorepo hints:", text)
+            self.assertIn("pnpm-workspace", text)
+            self.assertIn("multiple-package-json(2)", text)
+
+    def test_count_named_files_uses_repo_walk_helper(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            files = [
+                root / "package.json",
+                root / "apps" / "web" / "package.json",
+                root / "node_modules" / "left-pad" / "package.json",
+            ]
+
+            with patch.object(vibe_configure, "walk_repo_files", return_value=iter(files)) as mocked_walk:
+                count = vibe_configure._count_named_files(root, {"node_modules"}, {"package.json"})
+
+            self.assertEqual(count, 3)
+            mocked_walk.assert_called_once_with(root, {"node_modules"})
 
 
 if __name__ == "__main__":

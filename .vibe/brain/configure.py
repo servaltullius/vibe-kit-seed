@@ -11,10 +11,12 @@ from repo_detect import (
     detect_package_manager as _shared_detect_package_manager,
     detect_pyright,
     has_gradle_files,
+    has_pytest_config,
     pick_dotnet_target,
     read_text_best_effort,
     repo_has_any_named_file,
     repo_has_any_suffix,
+    walk_repo_files,
 )
 
 
@@ -166,6 +168,66 @@ def _pick_typecheck_recommendation(
     return None, None, meta
 
 
+def _detect_stack_signals(
+    *,
+    root: Path,
+    exclude_dirs: set[str],
+    package_json: dict[str, Any] | None,
+    pm: str | None,
+) -> list[str]:
+    signals: list[str] = []
+    if _pick_dotnet_target(root, exclude_dirs):
+        signals.append("dotnet")
+    if package_json is not None and pm:
+        signals.append(f"node/{pm}")
+
+    pyproject_text = read_text_best_effort(root / "pyproject.toml") if (root / "pyproject.toml").exists() else ""
+    if repo_has_any_suffix(root, exclude_dirs, {".py"}) or bool(pyproject_text):
+        if "[tool.mypy]" in pyproject_text or (root / "mypy.ini").exists():
+            signals.append("python+mypy")
+        elif detect_pyright(root):
+            signals.append("python+pyright")
+        else:
+            signals.append("python")
+
+    if (root / "go.mod").exists() or repo_has_any_named_file(root, exclude_dirs, {"go.mod"}):
+        signals.append("go")
+    if (root / "Cargo.toml").exists() or repo_has_any_named_file(root, exclude_dirs, {"Cargo.toml"}):
+        signals.append("rust")
+    if (root / "pom.xml").exists() or repo_has_any_named_file(root, exclude_dirs, {"pom.xml"}):
+        signals.append("maven")
+    if has_gradle_files(root, exclude_dirs):
+        signals.append("gradle")
+
+    deduped: list[str] = []
+    for signal in signals:
+        if signal not in deduped:
+            deduped.append(signal)
+    return deduped
+
+
+def _count_named_files(root: Path, exclude_dirs: set[str], names: set[str]) -> int:
+    count = 0
+    for p in walk_repo_files(root, exclude_dirs):
+        if p.name in names:
+            count += 1
+    return count
+
+
+def _detect_monorepo_hints(root: Path, exclude_dirs: set[str]) -> list[str]:
+    hints: list[str] = []
+    if (root / "pnpm-workspace.yaml").exists():
+        hints.append("pnpm-workspace")
+    if (root / "turbo.json").exists():
+        hints.append("turbo")
+    if (root / "nx.json").exists():
+        hints.append("nx")
+    package_json_count = _count_named_files(root, exclude_dirs, {"package.json"})
+    if package_json_count > 1:
+        hints.append(f"multiple-package-json({package_json_count})")
+    return hints
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description="Auto-detect repo stack and configure vibe-kit settings.")
     ap.add_argument("--apply", action="store_true", help="Write changes to `.vibe/config.json`.")
@@ -213,6 +275,12 @@ def main(argv: list[str]) -> int:
     if pm:
         detected["node_package_manager"] = pm
         detected["node_pm_source"] = pm_source
+    detected_stacks = _detect_stack_signals(root=root, exclude_dirs=exclude_dirs, package_json=package_json, pm=pm)
+    monorepo_hints = _detect_monorepo_hints(root, exclude_dirs)
+    if detected_stacks:
+        detected["detected_stacks"] = detected_stacks
+    if monorepo_hints:
+        detected["monorepo_hints"] = monorepo_hints
 
     cmd, when_globs, detect_meta = _pick_typecheck_recommendation(
         root=root,
@@ -247,9 +315,24 @@ def main(argv: list[str]) -> int:
         "apply": bool(args.apply),
         "force": bool(args.force),
         "detected": detected,
+        "summary": {
+            "recommended_typecheck": cmd,
+            "recommended_when_globs": when_globs,
+            "next_actions": [],
+        },
         "changes": changes,
         "skipped": skipped,
     }
+    summary = report["summary"]
+    if isinstance(summary, dict):
+        if cmd:
+            summary["next_actions"].append(f"Run the selected typecheck gate: {' '.join(cmd)}")
+        else:
+            summary["next_actions"].append("No typecheck gate was auto-detected; review `.vibe/config.json` manually.")
+        if len(detected_stacks) > 1:
+            summary["next_actions"].append("Polyglot repo detected; adjust `quality_gates.typecheck_cmd` if another stack should gate first.")
+        if monorepo_hints:
+            summary["next_actions"].append("Monorepo markers detected; review include/exclude globs and repo-level checks.")
     report_path = root / ".vibe" / "reports" / "configure_report.json"
     _write_text(report_path, _dump_json(report), apply=True)
 
@@ -259,6 +342,13 @@ def main(argv: list[str]) -> int:
     else:
         print("[configure] dry-run (use --apply to write .vibe/config.json)")
 
+    if detected_stacks:
+        print(f"[configure] detected stacks: {', '.join(detected_stacks)}")
+    if len(detected_stacks) > 1:
+        print("[configure] note: polyglot/monorepo signals found; one primary typecheck recommendation was selected.")
+    if monorepo_hints:
+        print(f"[configure] monorepo hints: {', '.join(monorepo_hints)}")
+
     if changes:
         print("[configure] proposed changes:")
         for ch in changes:
@@ -267,6 +357,22 @@ def main(argv: list[str]) -> int:
             print(f"  - {path}: {after!r}")
     else:
         print("[configure] no config changes proposed.")
+
+    if cmd:
+        print(f"[configure] recommended typecheck: {' '.join(cmd)}")
+    if when_globs:
+        print(f"[configure] typecheck triggers: {', '.join(when_globs)}")
+    if args.apply:
+        print("[configure] next: Run `python3 scripts/vibe.py doctor --full`")
+        if has_pytest_config(root):
+            print("[configure] next: Run your repo's normal checks (for example: `pytest`)")
+        if len(detected_stacks) > 1:
+            print("[configure] next: Review `quality_gates.typecheck_cmd` if a different stack should gate this repo first.")
+    else:
+        print("[configure] next: Apply changes with `python3 scripts/vibe.py configure --apply`")
+        print("[configure] next: Then run `python3 scripts/vibe.py doctor --full`")
+        if monorepo_hints:
+            print("[configure] next: Review monorepo markers and adjust `.vibe/config.json` globs/checks if needed.")
 
     print(f"[configure] wrote report: {report_path}")
     return 0

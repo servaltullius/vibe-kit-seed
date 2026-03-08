@@ -5,7 +5,48 @@ This repo publishes **immutable** seed release artifacts for installing **vibe-k
 - **You do not "adopt" this repo** as a dependency or starter template.
 - Consumers download the Release assets and run the installer in the **target repo**.
 
+## Quickstart
+
+처음 도입하는 팀은 아래 한 경로로 보면 됩니다.
+
+1. 설치
+   - GitHub Release/미러 URL에서 자동 설치:
+     `python3 vibekit_seed_install.py bootstrap --root . --apply --run-setup --post-configure --post-doctor --post-hooks --write-ci-guard --agent all`
+   - 로컬로 받아둔 release asset 디렉터리에서 설치:
+     `python3 vibekit_seed_install.py bootstrap --root . --assets-dir ./release-assets --apply --run-setup --post-configure --post-doctor --post-hooks --write-ci-guard --agent all`
+   - 정적 미러 URL base에서 설치:
+     `python3 vibekit_seed_install.py bootstrap --root . --assets-url-base https://example.com/vibe-kit/v1.2.3 --apply --run-setup --post-configure --post-doctor --post-hooks --write-ci-guard --agent all`
+
+2. 성공 확인
+   - `python3 scripts/vibe.py configure --apply`
+   - `python3 scripts/vibe.py doctor --full`
+   - `python3 scripts/vibe.py agents doctor --fail`
+
+3. 이후 반복 루프
+   - 검색: `python3 scripts/vibe.py search "<query>"`
+   - 영향도: `python3 scripts/vibe.py impact <path>`
+   - 에이전트용 팩: `python3 scripts/vibe.py pack --scope=changed --out .vibe/context/PACK.md`
+
 ## 한국어 안내 (자세히)
+
+### 0) 처음 도입하는 팀용 Quickstart
+
+target repo에서 가장 빠르게 성공 경로를 밟으려면 아래 순서를 권장합니다.
+
+1. 설치
+   - release asset을 이미 내려받았다면:
+     `python3 vibekit_seed_install.py install VIBEKIT_SEED-...md --root . --expected-seed-sha256 <sha256> --apply --agent all --run-setup`
+   - release asset을 자동으로 받아오려면:
+     `python3 vibekit_seed_install.py bootstrap --root . --apply --run-setup --post-configure --post-doctor --post-hooks --write-ci-guard --agent all`
+
+2. 설치 성공 확인
+   - `python3 scripts/vibe.py configure --apply`
+   - `python3 scripts/vibe.py doctor --full`
+   - `python3 scripts/vibe.py agents doctor --fail`
+
+3. 에이전트는 항상 먼저 읽기
+   - `.vibe/AGENT_CHECKLIST.md`
+   - `.vibe/context/LATEST_CONTEXT.md`
 
 ### 1) 이 레포는 “배포/설치”용입니다 (중요)
 
@@ -39,6 +80,8 @@ GitHub Releases의 같은 릴리즈에서 아래 3개 파일을 내려받습니�
 - 최신(또는 지정 태그) 릴리즈를 자동 다운로드/검증/설치:
   - dry-run: `python3 vibekit_seed_install.py bootstrap --root .`
   - apply: `python3 vibekit_seed_install.py bootstrap --root . --apply --run-setup --post-configure --post-doctor --post-hooks --write-ci-guard --agent all`
+  - `gh` 없이 이미 받은 asset 디렉터리를 사용할 때: `python3 vibekit_seed_install.py bootstrap --root . --assets-dir ./release-assets --apply --run-setup --post-configure --post-doctor --post-hooks --write-ci-guard --agent all`
+  - 정적 미러 URL base를 사용할 때: `python3 vibekit_seed_install.py bootstrap --root . --assets-url-base https://example.com/vibe-kit/v1.2.3 --apply --run-setup --post-configure --post-doctor --post-hooks --write-ci-guard --agent all`
   - 태그 고정 예시: `python3 vibekit_seed_install.py bootstrap --tag v1.2.3 --root . --apply`
 - 새 레포 자동 부트스트랩(옵트인 마커 방식):
   - 전역 훅 설치: `python3 vibekit_seed_install.py install-global-hook`
@@ -53,6 +96,11 @@ GitHub Releases의 같은 릴리즈에서 아래 3개 파일을 내려받습니�
 - target repo에 `.vibe/` + `scripts/vibe.py` 등이 **파일로만 설치**됩니다.
 - 설치기는 기본적으로 어떤 스크립트도 **자동 실행하지 않습니다**.
 - 런타임 산출물은 `.vibe/db/`, `.vibe/reports/` 등에 생성되며 보통 gitignore를 권장합니다.
+
+설치 후 성공 기준(권장):
+- `python3 scripts/vibe.py configure --apply`
+- `python3 scripts/vibe.py doctor --full`
+- `python3 scripts/vibe.py agents doctor --fail`
 
 ### vibe-kit 주요 기능 (설치 후, target repo에서 사용)
 
@@ -150,6 +198,12 @@ Consumers can verify downloaded assets with GitHub CLI:
 
 ## Install (from a GitHub Release)
 
+Quickstart success loop for a target repo:
+1. Install with either `install --apply --agent all --run-setup` or `bootstrap --apply --agent all --run-setup --post-configure --post-doctor`
+2. Run `python3 scripts/vibe.py configure --apply`
+3. Run `python3 scripts/vibe.py doctor --full`
+4. Run `python3 scripts/vibe.py agents doctor --fail`
+
 1) Download these assets from the same Release:
    - `VIBEKIT_SEED-<version>-<sha>.md`
    - `vibekit_seed_install.py`
@@ -168,6 +222,8 @@ Consumers can verify downloaded assets with GitHub CLI:
 4) Optional global automation:
    - One-shot bootstrap from Releases (download + checksum verify + install):
      - `python3 vibekit_seed_install.py bootstrap --root . --apply --run-setup --post-configure --post-doctor --post-hooks --write-ci-guard --agent all`
+     - If you already have downloaded assets locally and want to skip `gh`: `python3 vibekit_seed_install.py bootstrap --root . --assets-dir ./release-assets --apply --run-setup --post-configure --post-doctor --post-hooks --write-ci-guard --agent all`
+     - If you have a static mirror URL base: `python3 vibekit_seed_install.py bootstrap --root . --assets-url-base https://example.com/vibe-kit/v1.2.3 --apply --run-setup --post-configure --post-doctor --post-hooks --write-ci-guard --agent all`
      - Pin a specific tag: `python3 vibekit_seed_install.py bootstrap --tag v1.2.3 --root . --apply`
    - Install global opt-in hook for future repos:
      - `python3 vibekit_seed_install.py install-global-hook`
@@ -177,6 +233,7 @@ Consumers can verify downloaded assets with GitHub CLI:
 5) After install (in the target repo), run:
    - (recommended once) `python3 scripts/vibe.py configure --apply`
    - `python3 scripts/vibe.py doctor --full`
+   - `python3 scripts/vibe.py agents doctor --fail`
 
 ## Create a new seed file
 

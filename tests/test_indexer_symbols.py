@@ -161,5 +161,54 @@ class TestIndexerTypeScriptSymbols(unittest.TestCase):
                 con.close()
 
 
+class TestIndexerDeps(unittest.TestCase):
+    def test_rebuild_deps_indexes_python_js_and_project_references(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "src" / "domain").mkdir(parents=True, exist_ok=True)
+            (root / "src" / "infra").mkdir(parents=True, exist_ok=True)
+            (root / "web").mkdir(parents=True, exist_ok=True)
+            (root / "lib").mkdir(parents=True, exist_ok=True)
+            py_a = root / "src" / "domain" / "a.py"
+            py_b = root / "src" / "infra" / "b.py"
+            ts_a = root / "web" / "a.ts"
+            ts_b = root / "lib" / "b.ts"
+            csproj = root / "App.csproj"
+            dep_proj = root / "Lib.csproj"
+
+            py_a.write_text("import infra.b\n", encoding="utf-8")
+            py_b.write_text("x = 1\n", encoding="utf-8")
+            ts_b.write_text("export const x = 1;\n", encoding="utf-8")
+            ts_a.write_text("import { x } from '../lib/b'\n", encoding="utf-8")
+            csproj.write_text('<Project><ItemGroup><ProjectReference Include="Lib.csproj" /></ItemGroup></Project>\n', encoding="utf-8")
+            dep_proj.write_text("<Project/>\n", encoding="utf-8")
+
+            cfg = VibeConfig(
+                project_name="demo",
+                root=root,
+                exclude_dirs=[],
+                include_globs=["**/*.py", "**/*.ts", "**/*.csproj"],
+                critical_tags=["@critical", "CRITICAL:"],
+                latest_file=root / ".vibe" / "context" / "LATEST_CONTEXT.md",
+                max_recent_files=10,
+                context_commands={},
+                checks={},
+                quality_gates={},
+                placeholders={},
+                profiling={},
+                architecture={"python_roots": ["src"], "js_aliases": {}},
+            )
+            con = _memory_db()
+            try:
+                indexer._rebuild_deps(con, cfg, [py_a, py_b, ts_a, ts_b, csproj, dep_proj])
+                rows = con.execute("SELECT from_file,to_file,kind FROM deps ORDER BY kind, from_file, to_file").fetchall()
+                triples = {(row["from_file"], row["to_file"], row["kind"]) for row in rows}
+                self.assertIn(("src/domain/a.py", "src/infra/b.py", "py_import"), triples)
+                self.assertIn(("web/a.ts", "lib/b.ts", "js_import"), triples)
+                self.assertIn(("App.csproj", "Lib.csproj", "ProjectReference"), triples)
+            finally:
+                con.close()
+
+
 if __name__ == "__main__":
     unittest.main()

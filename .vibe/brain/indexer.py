@@ -8,7 +8,8 @@ import sys
 import time
 from pathlib import Path
 
-from context_db import VibeConfig, connect, is_excluded, load_config, normalize_rel, sha1_text
+import check_boundaries as boundary_deps
+from context_db import VibeConfig, connect, is_excluded, load_config, normalize_rel, record_recent_change, sha1_text
 from symbol_extract_py import extract_symbols_py
 from symbol_extract_ts import extract_symbols_ts
 from symbol_types import Symbol
@@ -184,31 +185,86 @@ def _extract_symbols_cs(text: str, rel_file: str, cfg: VibeConfig) -> list[Symbo
     return syms
 
 
-def _index_project_refs(con, cfg: VibeConfig) -> None:
-    # Rebuild deps as csproj graph only.
-    con.execute("DELETE FROM deps")
+def _project_ref_deps_for_file(path: Path, cfg: VibeConfig) -> list[tuple[str, str, str]]:
     root = cfg.root
-    csprojs = list(root.rglob("*.csproj"))
-    for p in csprojs:
-        rel_path = p.relative_to(root)
-        if is_excluded(rel_path, cfg.exclude_dirs):
-            continue
-        rel_from = normalize_rel(rel_path)
-        text = _read_text(p)
-        if not text:
-            continue
-        for m in re.finditer(r'<ProjectReference\s+Include="(?P<inc>[^"]+)"', text):
-            inc = m.group("inc")
-            inc_norm = inc.replace("\\", "/")
-            to_path = (p.parent / inc_norm).resolve()
-            try:
-                rel_to = normalize_rel(to_path.relative_to(root))
-            except ValueError:
-                rel_to = inc_norm
-            con.execute(
-                "INSERT INTO deps(from_file,to_file,kind) VALUES (?,?,?)",
-                (rel_from, rel_to, "ProjectReference"),
-            )
+    rel_path = path.relative_to(root)
+    if is_excluded(rel_path, cfg.exclude_dirs):
+        return []
+    rel_from = normalize_rel(rel_path)
+    text = _read_text(path)
+    if not text:
+        return []
+
+    deps: list[tuple[str, str, str]] = []
+    for m in re.finditer(r'<ProjectReference\s+Include="(?P<inc>[^"]+)"', text):
+        inc = m.group("inc")
+        inc_norm = inc.replace("\\", "/")
+        to_path = (path.parent / inc_norm).resolve()
+        try:
+            rel_to = normalize_rel(to_path.relative_to(root))
+        except ValueError:
+            rel_to = inc_norm
+        deps.append((rel_from, rel_to, "ProjectReference"))
+    return deps
+
+
+def _python_js_deps_for_file(path: Path, cfg: VibeConfig, *, module_to_file: dict[str, str], aliases: dict[str, str]) -> list[tuple[str, str, str]]:
+    rel_path = path.relative_to(cfg.root)
+    rel_s = normalize_rel(rel_path)
+    text = _read_text(path)
+    if text is None:
+        return []
+
+    suffix = path.suffix.lower()
+    deps: list[tuple[str, str, str]] = []
+    if suffix == ".py":
+        for dep in boundary_deps._python_deps_for_file(cfg, from_rel=rel_s, text=text, module_to_file=module_to_file):
+            deps.append((dep.from_file, dep.to_file, dep.kind))
+    elif suffix in {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts"}:
+        for dep in boundary_deps._js_deps_for_file(cfg, from_rel=rel_s, text=text, aliases=aliases):
+            deps.append((dep.from_file, dep.to_file, dep.kind))
+    return deps
+
+
+def _reindex_file_deps(con, cfg: VibeConfig, path: Path) -> None:
+    rel_s = normalize_rel(path.relative_to(cfg.root))
+    con.execute("DELETE FROM deps WHERE from_file = ?", (rel_s,))
+    if not path.exists() or not path.is_file():
+        con.commit()
+        return
+
+    deps: list[tuple[str, str, str]] = []
+    suffix = path.suffix.lower()
+    if suffix == ".csproj":
+        deps.extend(_project_ref_deps_for_file(path, cfg))
+    elif suffix in {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts"}:
+        rows = con.execute("SELECT path FROM files ORDER BY path").fetchall()
+        indexed = [str(r["path"]) for r in rows if r["path"]]
+        py_files = [p for p in indexed if p.endswith(".py")]
+        module_to_file = boundary_deps.build_python_dep_index(cfg, py_files)
+        aliases = boundary_deps.load_js_aliases(cfg)
+        deps.extend(_python_js_deps_for_file(path, cfg, module_to_file=module_to_file, aliases=aliases))
+
+    for from_file, to_file, kind in deps:
+        con.execute("INSERT INTO deps(from_file,to_file,kind) VALUES (?,?,?)", (from_file, to_file, kind))
+    con.commit()
+
+
+def _rebuild_deps(con, cfg: VibeConfig, files: list[Path]) -> None:
+    con.execute("DELETE FROM deps")
+    py_files = [normalize_rel(p.relative_to(cfg.root)) for p in files if p.suffix.lower() == ".py"]
+    module_to_file = boundary_deps.build_python_dep_index(cfg, py_files)
+    aliases = boundary_deps.load_js_aliases(cfg)
+    for p in files:
+        suffix = p.suffix.lower()
+        if suffix == ".csproj":
+            deps = _project_ref_deps_for_file(p, cfg)
+        elif suffix in {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts"}:
+            deps = _python_js_deps_for_file(p, cfg, module_to_file=module_to_file, aliases=aliases)
+        else:
+            deps = []
+        for from_file, to_file, kind in deps:
+            con.execute("INSERT INTO deps(from_file,to_file,kind) VALUES (?,?,?)", (from_file, to_file, kind))
     con.commit()
 
 
@@ -247,6 +303,7 @@ def index_file(path: Path, cfg: VibeConfig, con=None) -> bool:
                 "UPDATE files SET mtime=?, size=?, loc=? WHERE path=?",
                 (mtime, size, loc, rel_s),
             )
+            _reindex_file_deps(con, cfg, path)
             con.commit()
             return False
 
@@ -304,7 +361,9 @@ def index_file(path: Path, cfg: VibeConfig, con=None) -> bool:
         if max_bytes > 0 and size <= max_bytes:
             con.execute("INSERT INTO fts_files(path,content) VALUES (?,?)", (rel_s, text))
 
+        record_recent_change(con, path=rel_s, changed_at=time.time(), kind="changed")
         con.commit()
+        _reindex_file_deps(con, cfg, path)
         return True
     finally:
         if own_con:
@@ -334,8 +393,8 @@ def scan_all(cfg: VibeConfig) -> tuple[int, int]:
         if stale:
             _purge_stale_files(con, sorted(stale))
 
-        # Rebuild project reference deps once per full scan.
-        _index_project_refs(con, cfg)
+        # Rebuild dependency graph once per full scan.
+        _rebuild_deps(con, cfg, files)
     finally:
         con.close()
     dur = time.time() - start
@@ -351,7 +410,10 @@ def _purge_stale_files(con, paths: list[str]) -> None:
         con.execute(f"DELETE FROM symbols WHERE file IN ({q})", chunk)
         con.execute(f"DELETE FROM fts_symbols WHERE file IN ({q})", chunk)
         con.execute(f"DELETE FROM fts_files WHERE path IN ({q})", chunk)
+        con.execute(f"DELETE FROM deps WHERE from_file IN ({q}) OR to_file IN ({q})", chunk + chunk)
         con.execute(f"DELETE FROM files WHERE path IN ({q})", chunk)
+    for path in paths:
+        record_recent_change(con, path=path, changed_at=time.time(), kind="deleted")
     con.commit()
 
 

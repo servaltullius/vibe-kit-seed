@@ -6,6 +6,7 @@ import io
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import vibekit_seed_install as vsi
@@ -186,7 +187,11 @@ class TestInstaller(unittest.TestCase):
             self.assertTrue((root / "GEMINI.md").exists())
             self.assertTrue((root / ".github" / "copilot-instructions.md").exists())
             self.assertTrue((root / ".cursor" / "rules" / "vibekit.md").exists())
+            agents = (root / "AGENTS.md").read_text(encoding="utf-8")
+            self.assertIn(".vibe/AGENT_CHECKLIST.md", agents)
+            self.assertIn(".vibe/context/LATEST_CONTEXT.md", agents)
             copilot = (root / ".github" / "copilot-instructions.md").read_text(encoding="utf-8")
+            self.assertIn(".vibe/AGENT_CHECKLIST.md", copilot)
             self.assertIn("python3 scripts/vibe.py doctor --full", copilot)
 
 
@@ -252,6 +257,87 @@ class TestBootstrapHelpers(unittest.TestCase):
             content = wf.read_text(encoding="utf-8")
             self.assertIn("python3 scripts/vibe.py doctor --full", content)
             self.assertIn("python3 scripts/vibe.py agents doctor --fail", content)
+            self.assertNotIn("branches: [main]", content)
+
+    def test_bootstrap_uses_local_assets_dir_without_gh(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            assets_dir = base / "assets"
+            target = base / "target"
+            assets_dir.mkdir(parents=True, exist_ok=True)
+
+            seed = assets_dir / "VIBEKIT_SEED-1.2.2-sample.md"
+            installer = assets_dir / "vibekit_seed_install.py"
+            seed.write_text("seed", encoding="utf-8")
+            installer.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+            seed_sha = hashlib.sha256(seed.read_bytes()).hexdigest()
+            installer_sha = hashlib.sha256(installer.read_bytes()).hexdigest()
+            (assets_dir / "SHA256SUMS").write_text(
+                f"{seed_sha}  {seed.name}\n{installer_sha}  vibekit_seed_install.py\n",
+                encoding="utf-8",
+            )
+
+            with patch.object(vsi, "_install", return_value=0) as install_mock, patch.object(vsi.shutil, "which", return_value=None):
+                rc = vsi._bootstrap(
+                    root=target,
+                    release_repo="servaltullius/vibe-kit-seed",
+                    release_tag=None,
+                    assets_dir=assets_dir,
+                    assets_url_base=None,
+                    force=False,
+                    apply=False,
+                    agent="all",
+                    run_setup=False,
+                    post_configure=False,
+                    post_doctor=False,
+                    post_hooks=False,
+                    write_ci_guard=False,
+                )
+
+            self.assertEqual(rc, 0)
+            install_mock.assert_called_once()
+            self.assertEqual(install_mock.call_args.kwargs["seed_md"], seed)
+            self.assertEqual(install_mock.call_args.kwargs["expected_seed_sha256"], seed_sha)
+
+    def test_bootstrap_uses_assets_url_base_without_gh(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            assets_dir = base / "assets"
+            target = base / "target"
+            assets_dir.mkdir(parents=True, exist_ok=True)
+
+            seed = assets_dir / "VIBEKIT_SEED-1.2.2-sample.md"
+            installer = assets_dir / "vibekit_seed_install.py"
+            seed.write_text("seed", encoding="utf-8")
+            installer.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+            seed_sha = hashlib.sha256(seed.read_bytes()).hexdigest()
+            installer_sha = hashlib.sha256(installer.read_bytes()).hexdigest()
+            (assets_dir / "SHA256SUMS").write_text(
+                f"{seed_sha}  {seed.name}\n{installer_sha}  vibekit_seed_install.py\n",
+                encoding="utf-8",
+            )
+
+            with patch.object(vsi, "_install", return_value=0) as install_mock, patch.object(vsi.shutil, "which", return_value=None):
+                rc = vsi._bootstrap(
+                    root=target,
+                    release_repo="servaltullius/vibe-kit-seed",
+                    release_tag=None,
+                    assets_dir=None,
+                    assets_url_base=assets_dir.as_uri(),
+                    force=False,
+                    apply=False,
+                    agent="all",
+                    run_setup=False,
+                    post_configure=False,
+                    post_doctor=False,
+                    post_hooks=False,
+                    write_ci_guard=False,
+                )
+
+            self.assertEqual(rc, 0)
+            install_mock.assert_called_once()
+            self.assertEqual(install_mock.call_args.kwargs["seed_md"].name, seed.name)
+            self.assertEqual(install_mock.call_args.kwargs["expected_seed_sha256"], seed_sha)
 
     def test_build_global_codex_prompt_block_contains_install_question_and_actions(self) -> None:
         block = vsi._build_global_codex_vibekit_prompt_block(

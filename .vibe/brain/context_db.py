@@ -125,6 +125,13 @@ def ensure_schema(con: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_deps_from ON deps(from_file);
         CREATE INDEX IF NOT EXISTS idx_deps_to ON deps(to_file);
 
+        CREATE TABLE IF NOT EXISTS recent_changes (
+          path TEXT PRIMARY KEY,
+          changed_at REAL NOT NULL,
+          kind TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_recent_changes_changed_at ON recent_changes(changed_at DESC);
+
         CREATE VIRTUAL TABLE IF NOT EXISTS fts_symbols
           USING fts5(name, file, doc, tags, signature, attrs);
 
@@ -136,6 +143,18 @@ def ensure_schema(con: sqlite3.Connection) -> None:
           value TEXT NOT NULL
         );
         """
+    )
+
+
+def meta_get(con: sqlite3.Connection, key: str) -> str | None:
+    row = con.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    return str(row["value"]) if row else None
+
+
+def meta_set(con: sqlite3.Connection, key: str, value: str) -> None:
+    con.execute(
+        "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (key, value),
     )
 
 
@@ -153,3 +172,11 @@ def is_excluded(rel_path: Path, exclude_dirs: Iterable[str]) -> bool:
 
 def normalize_rel(path: Path) -> str:
     return path.as_posix()
+
+
+def record_recent_change(con: sqlite3.Connection, *, path: str, changed_at: float, kind: str) -> None:
+    con.execute(
+        "INSERT INTO recent_changes(path, changed_at, kind) VALUES (?,?,?) "
+        "ON CONFLICT(path) DO UPDATE SET changed_at=excluded.changed_at, kind=excluded.kind",
+        (path, float(changed_at), str(kind)),
+    )

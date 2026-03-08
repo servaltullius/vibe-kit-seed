@@ -75,6 +75,7 @@ def _seed_collect_files(root: Path) -> list[Path]:
         root / "scripts" / "vibekit.py",
         root / "scripts" / "vibekit.cmd",
         root / "scripts" / "setup_vibe_env.py",
+        root / "scripts" / "agent_templates.py",
         root / "scripts" / "install_hooks.py",
         root / ".vibe" / "README.md",
         root / ".vibe" / "AGENT_CHECKLIST.md",

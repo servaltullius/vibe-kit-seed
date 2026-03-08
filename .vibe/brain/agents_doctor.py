@@ -2,9 +2,20 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 from context_db import is_excluded, load_config
+
+SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from agent_templates import (  # noqa: E402
+    render_agents_doctor_remediation,
+    required_context_hints,
+    required_doctor_hints,
+)
 
 
 AGENT_FILES = [
@@ -16,15 +27,9 @@ AGENT_FILES = [
     ".cursor/rules/vibekit.md",
 ]
 
-REQUIRED_CONTEXT_HINTS = [
-    ".vibe/AGENT_CHECKLIST.md",
-    ".vibe/context/LATEST_CONTEXT.md",
-]
+REQUIRED_CONTEXT_HINTS = required_context_hints()
 
-REQUIRED_DOCTOR_HINTS = [
-    "python3 scripts/vibe.py doctor --full",
-    "scripts\\vibe.cmd doctor --full",
-]
+REQUIRED_DOCTOR_HINTS = required_doctor_hints()
 
 
 def _discover_agent_files(root: Path, exclude_dirs: list[str]) -> list[Path]:
@@ -95,6 +100,7 @@ def main(argv: list[str]) -> int:
             warnings += 1
             for issue in issues:
                 print(f"[agents-doctor] WARN: {rel} {issue}")
+            print(render_agents_doctor_remediation(rel.as_posix()))
         else:
             print(f"[agents-doctor] OK: {rel}")
 

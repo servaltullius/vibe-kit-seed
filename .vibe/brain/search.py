@@ -17,24 +17,60 @@ def _snippet(text: str, width: int = 120) -> str:
     return s[: width - 1] + "…"
 
 
-def _search_fts(con: sqlite3.Connection, query: str, limit: int) -> None:
-    rows = con.execute(
-        "SELECT name,file,doc,signature FROM fts_symbols WHERE fts_symbols MATCH ? LIMIT ?",
-        (query, limit),
-    ).fetchall()
+def _query_terms(query: str) -> list[str]:
+    return [term for term in "".join(ch if (ch.isalnum() or ch == "_") else " " for ch in query).split() if term]
 
-    rows_files = con.execute(
-        "SELECT path, snippet(fts_files, 1, '[', ']', '…', 12) AS snip "
-        "FROM fts_files WHERE fts_files MATCH ? LIMIT ?",
-        (query, limit),
-    ).fetchall()
 
-    print(f"# Symbols (top {limit})")
+def _fts_query(query: str) -> str:
+    terms = _query_terms(query)
+    if not terms:
+        return ""
+    return " OR ".join(terms)
+
+
+def _print_symbol_rows(rows) -> None:
     for r in rows:
         sig = r["signature"] or r["name"]
         print(f"- {r['file']}:{sig}")
         if r["doc"]:
             print(f"  {_snippet(r['doc'])}")
+
+
+def _search_exact_symbols(con: sqlite3.Connection, query: str, limit: int):
+    return con.execute(
+        "SELECT name,file,doc,signature FROM symbols "
+        "WHERE lower(name) = lower(?) OR lower(signature) = lower(?) "
+        "ORDER BY exported_int DESC, name "
+        "LIMIT ?",
+        (query, query, limit),
+    ).fetchall()
+
+
+def _search_fts(con: sqlite3.Connection, query: str, limit: int) -> None:
+    fts_query = _fts_query(query)
+    exact_rows = _search_exact_symbols(con, query, limit)
+    rows = con.execute(
+        "SELECT name,file,doc,signature FROM fts_symbols WHERE fts_symbols MATCH ? LIMIT ?",
+        (fts_query, limit),
+    ).fetchall()
+
+    rows_files = con.execute(
+        "SELECT path, snippet(fts_files, 1, '[', ']', '…', 12) AS snip "
+        "FROM fts_files WHERE fts_files MATCH ? LIMIT ?",
+        (fts_query, limit),
+    ).fetchall()
+
+    print(f"# Symbols (top {limit})")
+    seen: set[tuple[str, str]] = set()
+    for r in exact_rows:
+        seen.add((str(r["file"]), str(r["signature"] or r["name"])))
+    _print_symbol_rows(exact_rows)
+    for r in rows:
+        key = (str(r["file"]), str(r["signature"] or r["name"]))
+        if key in seen:
+            continue
+        seen.add(key)
+        _print_symbol_rows([r])
 
     print(f"\n# Files (top {limit})")
     for r in rows_files:
@@ -91,6 +127,8 @@ def main(argv: list[str]) -> int:
     con = connect()
     try:
         try:
+            if not _fts_query(args.query):
+                raise sqlite3.OperationalError("empty normalized query")
             _search_fts(con, args.query, args.limit)
         except sqlite3.OperationalError as e:
             print(f"[search] fts error: {e}", file=sys.stderr)
